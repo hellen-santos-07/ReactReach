@@ -7,7 +7,7 @@ const fs = require("fs");
 const { runAudit, extractVulnerablePackages } = require("./dependency/runAudit");
 const { parseProject } = require("./component/parseProject");
 const extractDependencyUsage = require("./dependency/extractDependencyUsage");
-const extractComponents = require("./ast/extractComponents");
+const extractComponents = require("./component/extractComponents");
 const extractSinks = require("./sinks/extractSinks");
 const computeReachability = require("./reachability/computeReachability");
 
