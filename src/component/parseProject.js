@@ -1,10 +1,10 @@
 const fs = require("fs");
 const path = require("path");
-const glob = require("glob");
+const fg = require("fast-glob");
 const parser = require("@babel/parser");
 
 function getSourceFiles(projectPath) {
-  return glob.sync("src/**/*.{js,jsx,ts,tsx}", {
+  return fg.sync("src/**/*.{js,jsx,ts,tsx}", {
     cwd: projectPath,
     absolute: true,
     ignore: [
