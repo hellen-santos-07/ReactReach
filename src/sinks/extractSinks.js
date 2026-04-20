@@ -32,16 +32,16 @@ function collectIdentifiers(node) {
 // JSX attribute names that are security-sensitive on specific elements.
 // primary injection vectors in React's rendering model.
 const JSX_SINK_ATTRIBUTES = new Map([
-  // <a href={expr}> — XSS via javascript: protocol
+  // <a href={expr}> - XSS via javascript: protocol
   ["href", new Set(["a"])],
   // <iframe src={expr}> / <script src={expr}> / <embed src={expr}>
   ["src", new Set(["iframe", "script", "embed", "object"])],
-  // <form action={expr}> — form hijacking
+  // <form action={expr}> - form hijacking
   ["action", new Set(["form"])],
-  // <object data={expr}> — remote content loading
+  // <object data={expr}> - remote content loading
   ["data", new Set(["object"])],
   // <a href> / <area href> with formAction
-  ["formAction", new Set(["button", "input"])]
+  ["formAction", new Set(["button", "input"])],
 ]);
 
 function extractSinks(parsedFiles) {
@@ -49,28 +49,25 @@ function extractSinks(parsedFiles) {
 
   for (const file of parsedFiles) {
     traverse(file.ast, {
-
-      // ----------------------------------------------
-      //  REACT-SPECIFIC JSX SINKS
+      //  react-specific jsx SINKS
 
       JSXAttribute(path) {
         const attrName = path.node.name?.name;
         if (!attrName) return;
 
-        // --- dangerouslySetInnerHTML={{ __html: expr }} ---
-        // The #1 React XSS vector — bypasses React's auto-escaping
+        //dangerouslySetInnerHTML={{ __html: expr }}
         if (attrName === "dangerouslySetInnerHTML") {
           const argNode = path.node.value;
           sinks.push({
             sinkType: "dangerouslySetInnerHTML",
             filePath: file.filePath,
             loc: path.node.loc,
-            identifiers: [...collectIdentifiers(argNode)]
+            identifiers: [...collectIdentifiers(argNode)],
           });
           return;
         }
 
-        // --- href, src, action, etc on security sensitive elements ---
+        //href, src, action, ... on security sensitive elements
         const targetElements = JSX_SINK_ATTRIBUTES.get(attrName);
         if (!targetElements) return;
 
@@ -89,14 +86,13 @@ function extractSinks(parsedFiles) {
               sinkType: `${elemName.name}.${attrName}`,
               filePath: file.filePath,
               loc: path.node.loc,
-              identifiers: [...collectIdentifiers(value.expression)]
+              identifiers: [...collectIdentifiers(value.expression)],
             });
           }
         }
       },
 
-      // ----------------------------------------------
-      //  REF-BASED DOM ESCAPE HATCHES
+      //  ref-based SINKS that escape React's usual JSX sanitization model
 
       AssignmentExpression(path) {
         const left = path.node.left;
@@ -112,14 +108,15 @@ function extractSinks(parsedFiles) {
             sinkType: `ref.${left.property.name}`,
             filePath: file.filePath,
             loc: path.node.loc,
-            identifiers: [...collectIdentifiers(path.node.right)]
+            identifiers: [...collectIdentifiers(path.node.right)],
           });
         }
 
         // window.location / location = expr
         if (left.type === "MemberExpression") {
           const isLocationAssign =
-            (left.object.type === "Identifier" && left.object.name === "location") ||
+            (left.object.type === "Identifier" &&
+              left.object.name === "location") ||
             (left.object.type === "MemberExpression" &&
               left.object.object.type === "Identifier" &&
               left.object.object.name === "window" &&
@@ -131,30 +128,33 @@ function extractSinks(parsedFiles) {
               sinkType: "location-assign",
               filePath: file.filePath,
               loc: path.node.loc,
-              identifiers: [...collectIdentifiers(path.node.right)]
+              identifiers: [...collectIdentifiers(path.node.right)],
             });
           }
         }
       },
 
-      // ----------------------------------------------
-      //  GENERAL JS SINKS 
+      // some general JS SINKS
 
       CallExpression(path) {
         const callee = path.node.callee;
         const args = path.node.arguments;
 
         // eval(expr)
-        if (callee.type === "Identifier" && callee.name === "eval" && args.length > 0) {
+        if (
+          callee.type === "Identifier" &&
+          callee.name === "eval" &&
+          args.length > 0
+        ) {
           sinks.push({
             sinkType: "eval",
             filePath: file.filePath,
             loc: path.node.loc,
-            identifiers: [...collectIdentifiers(args[0])]
+            identifiers: [...collectIdentifiers(args[0])],
           });
         }
 
-        // ref.current.insertAdjacentHTML(pos, expr) — via ref escape hatch
+        // ref.current.insertAdjacentHTML(pos, expr) - via ref escape hatch
         if (
           callee.type === "MemberExpression" &&
           !callee.computed &&
@@ -166,12 +166,12 @@ function extractSinks(parsedFiles) {
             sinkType: "ref.insertAdjacentHTML",
             filePath: file.filePath,
             loc: path.node.loc,
-            identifiers: [...collectIdentifiers(args[1])]
+            identifiers: [...collectIdentifiers(args[1])],
           });
         }
       },
 
-      NewExpression(path) {
+      NewExpression(path) { // new Function
         if (
           path.node.callee.type === "Identifier" &&
           path.node.callee.name === "Function" &&
@@ -182,10 +182,10 @@ function extractSinks(parsedFiles) {
             sinkType: "new Function",
             filePath: file.filePath,
             loc: path.node.loc,
-            identifiers: [...collectIdentifiers(lastArg)]
+            identifiers: [...collectIdentifiers(lastArg)],
           });
         }
-      }
+      },
     });
   }
 
