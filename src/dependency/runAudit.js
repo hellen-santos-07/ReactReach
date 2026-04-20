@@ -1,20 +1,47 @@
 const { execSync } = require("child_process");
 
+/**
+ *
+ * @param {*} projectPath
+ * @returns { Map<string, {
+ * name: string,
+ * severity: string,
+ * isDirect: boolean,  
+ * via: Array<string>,
+ * effects: Array<string>,
+ * range: string | null,
+ * nodes: Array<string>,
+ * fixAvailable: boolean
+ *  }>}
+ * 
+ * name: string (the name of the vulnerable package)
+ * severity: string (the severity level of the vulnerability, e.g., "low", "moderate", "high", "critical")
+ * isDirect: boolean (whether the vulnerable package is a direct dependency)
+ * via: Array<string> (the dependency chain leading to the vulnerable package)
+ * effects: Array<string> (the paths in the dependency tree that are affected by this vulnerability)
+ * range: string | null (the version range of the vulnerable package)
+ * nodes: Array<string> (the specific dependency paths that lead to the vulnerable package)
+ * fixAvailable: boolean (whether a fix is available for this vulnerability)
+ */
 function runAudit(projectPath) {
+  let auditData;
   try {
     const result = execSync("npm audit --json", {
       cwd: projectPath,
       encoding: "utf8",
-      stdio: "pipe"
+      stdio: "pipe",
     });
 
-    return JSON.parse(result);
+    auditData = JSON.parse(result);
   } catch (error) {
     if (error.stdout) {
-      return JSON.parse(error.stdout);
+      auditData = JSON.parse(error.stdout);
+    } else {
+      throw error;
     }
-    throw error;
   }
+
+  return extractVulnerablePackages(auditData);
 }
 
 function extractVulnerablePackages(auditData) {
@@ -33,7 +60,7 @@ function extractVulnerablePackages(auditData) {
       effects: info.effects || [],
       range: info.range || null,
       nodes: info.nodes || [],
-      fixAvailable: info.fixAvailable || false
+      fixAvailable: info.fixAvailable || false,
     });
   }
 
@@ -42,5 +69,5 @@ function extractVulnerablePackages(auditData) {
 
 module.exports = {
   runAudit,
-  extractVulnerablePackages
+  extractVulnerablePackages,
 };
