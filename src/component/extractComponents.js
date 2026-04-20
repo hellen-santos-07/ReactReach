@@ -22,7 +22,7 @@ function isJSXReturningFunction(node) {
 
 /**
  * Collects the set of file-level imported identifiers that exist in this file AST.
- * Returns a Map: identifierName -> packageSource
+ * Returns a Map: identifierName, packageSource
  */
 function collectFileImports(ast) {
   const imports = new Map();
@@ -130,7 +130,7 @@ function extractComponents(parsedFiles) {
     traverse(file.ast, {
       FunctionDeclaration(path) {
         const name = path.node.id?.name;
-        if (name && /^[A-Z]/.test(name) && isJSXReturningFunction(path.node)) {
+        if (name && /^[A-Z]/.test(name) && isJSXReturningFunction(path.node)) { // default components : should match PascalCase and return JSX
           const body = path.node.body;
           const usedImports = collectReferencedImports(body, fileImports);
           const renderedChildren = collectRenderedComponents(body);
@@ -144,21 +144,22 @@ function extractComponents(parsedFiles) {
             usedImports: Object.fromEntries(
               [...usedImports].map((id) => [id, fileImports.get(id)])
             ),
-            renderedComponents: [...renderedChildren]
+            renderedComponents: [...renderedChildren],
+            params: path.node.params
           });
         }
       },
 
-      VariableDeclarator(path) {
+      VariableDeclarator(path) { 
         const id = path.node.id;
         const init = path.node.init;
 
         if (
           id?.type === "Identifier" &&
           /^[A-Z]/.test(id.name) &&
-          (init?.type === "ArrowFunctionExpression" || init?.type === "FunctionExpression") &&
+          (init?.type === "ArrowFunctionExpression" || init?.type === "FunctionExpression") && //Arrow function components: same as function declaration but also check for arrow functions
           isJSXReturningFunction(init)
-        ) {
+        ) { 
           const body = init.body;
           const usedImports = collectReferencedImports(body, fileImports);
           const renderedChildren = collectRenderedComponents(body);
@@ -172,7 +173,8 @@ function extractComponents(parsedFiles) {
             usedImports: Object.fromEntries(
               [...usedImports].map((id) => [id, fileImports.get(id)])
             ),
-            renderedComponents: [...renderedChildren]
+            renderedComponents: [...renderedChildren],
+            params: init.params
           });
         }
       },
@@ -184,7 +186,7 @@ function extractComponents(parsedFiles) {
         if (
           name &&
           /^[A-Z]/.test(name) &&
-          superClass &&
+          superClass && // class components : check if it extends React.Component or Component
           (
             superClass.type === "MemberExpression" ||
             superClass.type === "Identifier"
@@ -203,7 +205,8 @@ function extractComponents(parsedFiles) {
             usedImports: Object.fromEntries(
               [...usedImports].map((id) => [id, fileImports.get(id)])
             ),
-            renderedComponents: [...renderedChildren]
+            renderedComponents: [...renderedChildren], // to build the component graph, we need those to resolve these names to actual components in a later step
+            params: null // class components access props via this.props
           });
         }
       }

@@ -34,6 +34,14 @@ function parseFile(filePath) {
   return { code, ast };
 }
 
+/**
+ * 
+ * @param {*} projectPath 
+ * @returns {Array<{filePath: string, code: string, ast: object}>}
+ *  filePath: string (the absolute path to the source file)
+ *  code: string (the raw source code of the file)
+ *  ast: Babel AST (the parsed abstract syntax tree of the file)
+ */
 function parseProject(projectPath) {
   const files = getSourceFiles(projectPath);
 
