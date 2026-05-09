@@ -38,31 +38,34 @@ program
     console.log("ReactReach scanning project:");
     console.log(projectPath);
 
-    // Dependency Usage Analysis
+    // Stage 1 – Dependency Audit
     const vulnerablePackages = runAudit(projectPath);
     console.log(`\n[1] Vulnerable packages found: ${vulnerablePackages.size}`);
 
+    // Stage 2 – Source Parsing
     const parsedFiles = parseProject(projectPath);
     console.log(`[2] Source files parsed: ${parsedFiles.length}`);
 
+    // Stage 3a – Dependency Usage Extraction
     const dependencyUsages = extractDependencyUsage(parsedFiles, vulnerablePackages);
-    console.log(`[3] Vulnerable dependency usages found: ${dependencyUsages.length}`);
+    console.log(`[3a] Vulnerable dependency usages found: ${dependencyUsages.length}`);
 
-    // Component Module
+    // Stage 3b – Component Extraction
     const components = extractComponents(parsedFiles);
-    console.log(`[4.1] React components found: ${components.length}`);
+    console.log(`[3b] React components found: ${components.length}`);
 
+    // Stage 3c – Sink Extraction
+    const sinks = extractSinks(parsedFiles);
+    console.log(`[3c] Security sinks found: ${sinks.length}`);
+
+    // Stage 4 – Component Graph Construction
     const graph = buildComponentGraph(components);
     const roots = graph.roots();
-    console.log(`[4.2] Component Graph (CoG): ${graph.size} nodes, ${graph.edgeCount} edges, ${roots.length} root(s)`);
+    console.log(`[4] Component Graph (CoG): ${graph.size} nodes, ${graph.edgeCount} edges, ${roots.length} root(s)`);
 
-    // Security Sinks Module
-    const sinks = extractSinks(parsedFiles);
-    console.log(`[5] Security sinks found: ${sinks.length}`);
-
-    // Reachability Module
+    // Stage 5 – Reachability Analysis
     const findings = computeReachability(dependencyUsages, components, sinks, graph);
-    console.log(`[6] Reachability findings: ${findings.length}`);
+    console.log(`[5] Reachability findings: ${findings.length}`);
 
     const report = buildReport(
       projectPath, vulnerablePackages, parsedFiles, components, graph, sinks, findings
