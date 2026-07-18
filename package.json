@@ -8,7 +8,10 @@
   },
   "scripts": {
     "start": "node src/cli.js",
-    "dev": "nodemon src/cli.js"
+    "dev": "nodemon src/cli.js",
+    "test": "node --test",
+    "test:watch": "node --test --watch",
+    "test:coverage": "node --test --experimental-test-coverage"
   },
   "dependencies": {
     "@babel/parser": "^7.29.0",

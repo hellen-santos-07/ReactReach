@@ -50,10 +50,11 @@ function buildReport(
   graph,
   sinks,
   findings,
+  options = {},
 ) {
   return {
     projectPath,
-    scannedAt: new Date().toISOString(),
+    scannedAt: options.scannedAt ?? new Date().toISOString(),
     summary: {
       vulnerablePackages: vulnerablePackages.size,
       sourceFiles: parsedFiles.length,
@@ -435,4 +436,5 @@ module.exports = {
   printSummaryTable,
   saveReport,
   saveSarifReport,
+  formatSarifReport,
 };
