@@ -251,6 +251,15 @@ function isInsideComponent(sink, component) {
   );
 }
 
+function sinkMetadata(sink) {
+  return {
+    sinkRuleId: sink.ruleId ?? null,
+    sinkCategory: sink.category ?? null,
+    sinkPriority: sink.priority ?? null,
+    confidence: sink.confidence ?? null,
+  };
+}
+
 /**
  * Finds JSX attributes in a component body that pass tainted data as props to child components (PascalCase JSX elements).
  *
@@ -463,6 +472,7 @@ function computeReachability(
               component: component.name,
               sinkType: sink.sinkType,
               sinkLoc: sink.loc,
+              ...sinkMetadata(sink),
               taintedPath: overlap,
             });
           }
@@ -532,6 +542,7 @@ function computeReachability(
                   childComponent: childComp.name,
                   sinkType: childSink.sinkType,
                   sinkLoc: childSink.loc,
+                  ...sinkMetadata(childSink),
                   sinkFilePath: childComp.filePath,
                   taintedPath: [...propNames, ...overlap],
                   propagationType: "inter-component",

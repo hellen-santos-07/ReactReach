@@ -1,12 +1,19 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { buildReport, formatSarifReport } = require("../src/report/generateReport");
+const { buildReport, formatSarifReport, printSummaryTable } = require("../src/report/generateReport");
 
 test("buildReport accepts an injected scan timestamp and preserves its schema", () => {
   const graph = { size: 1, edgeCount: 0 };
   const report = buildReport("/project", new Map(), [], [], graph, [], [], { scannedAt: "2026-01-02T03:04:05.000Z" });
   assert.equal(report.scannedAt, "2026-01-02T03:04:05.000Z");
+  assert.deepEqual(report.configuration, {});
   assert.deepEqual(report.summary, { vulnerablePackages: 0, sourceFiles: 0, components: 0, cogNodes: 1, cogEdges: 0, sinks: 0, findings: 0 });
+});
+
+test("report records the effective scan configuration", () => {
+  const config = { sinks: ["eval"], sort: "sink-priority" };
+  const report = buildReport("/project", new Map(), [], [], { size: 0, edgeCount: 0 }, [], [], { config });
+  assert.deepEqual(report.configuration, config);
 });
 
 test("SARIF formatting characterizes rule and source location output", () => {
@@ -28,4 +35,18 @@ test("SARIF formatting characterizes rule and source location output", () => {
   assert.equal(result.level, "error");
   assert.equal(result.locations[0].physicalLocation.region.startLine, 4);
   assert.equal(result.locations[0].physicalLocation.artifactLocation.uri, "src/App.jsx");
+});
+
+test("summary table can sort reached sinks by configured priority", () => {
+  const findings = [
+    { packageName: "lower", reachability: "CRITICAL", sinkType: "eval", sinkPriority: 20, filePath: "/project/a.jsx" },
+    { packageName: "higher", reachability: "HIGH", sinkType: "location-assign", sinkPriority: 90, filePath: "/project/b.jsx" },
+  ];
+  const output = [];
+  const originalLog = console.log;
+  console.log = (line = "") => output.push(line);
+  try { printSummaryTable(findings, "/project/", { sort: "sink-priority" }); }
+  finally { console.log = originalLog; }
+  const text = output.join("\n");
+  assert.ok(text.indexOf("higher") < text.indexOf("lower"));
 });

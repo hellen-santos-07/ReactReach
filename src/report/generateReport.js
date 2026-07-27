@@ -55,6 +55,7 @@ function buildReport(
   return {
     projectPath,
     scannedAt: options.scannedAt ?? new Date().toISOString(),
+    configuration: options.config ?? {},
     summary: {
       vulnerablePackages: vulnerablePackages.size,
       sourceFiles: parsedFiles.length,
@@ -76,17 +77,18 @@ function buildReport(
  * @param {Array}  findings
  * @param {string} projectPath  - used to compute relative file paths in the table
  */
-function printSummaryTable(findings, projectPath) {
+function printSummaryTable(findings, projectPath, options = {}) {
   if (findings.length === 0) {
     console.log("\nNo reachability findings.");
     return;
   }
 
-  const sorted = [...findings].sort(
-    (a, b) =>
-      (SEVERITY_ORDER[a.reachability] ?? 99) -
-      (SEVERITY_ORDER[b.reachability] ?? 99),
-  );
+  const severitySort = (a, b) => (SEVERITY_ORDER[a.reachability] ?? 99) - (SEVERITY_ORDER[b.reachability] ?? 99);
+  const sorted = [...findings].sort((a, b) => {
+    if (options.sort === "sink-priority") return (b.sinkPriority ?? -1) - (a.sinkPriority ?? -1) || severitySort(a, b);
+    if (options.sort === "risk") return (b.riskScore ?? -1) - (a.riskScore ?? -1) || severitySort(a, b);
+    return severitySort(a, b);
+  });
 
   // Column widths (characters)
   const W = { sev: 8, audit: 10, pkg: 20, comp: 22, sink: 28, file: 36 };
@@ -356,6 +358,10 @@ function formatSarifReport(report) {
         component: f.component ?? null,
         childComponent: f.childComponent ?? null,
         sinkType: f.sinkType ?? null,
+        sinkRuleId: f.sinkRuleId ?? null,
+        sinkCategory: f.sinkCategory ?? null,
+        sinkPriority: f.sinkPriority ?? null,
+        confidence: f.confidence ?? null,
         taintedPath: f.taintedPath ?? [],
         propagationType: f.propagationType ?? "intra-component",
       },

@@ -17,6 +17,9 @@ test("direct flow into a sink is CRITICAL", () => {
   assert.equal(findings.length, 1);
   assert.equal(findings[0].reachability, "CRITICAL");
   assert.equal(findings[0].sinkType, "dangerouslySetInnerHTML");
+  assert.equal(findings[0].sinkRuleId, "inner-html");
+  assert.equal(findings[0].sinkPriority, 100);
+  assert.equal(findings[0].confidence, 100);
 });
 
 test("local propagation into a sink is HIGH", () => {

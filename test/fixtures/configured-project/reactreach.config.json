@@ -1,0 +1,9 @@
+{
+  "sinks": ["eval", "location"],
+  "excludeSinks": ["jsx-url"],
+  "minSinkPriority": 25,
+  "sinkPriorities": {
+    "eval": 75
+  },
+  "sort": "sink-priority"
+}
