@@ -27,6 +27,7 @@ test("SARIF formatting characterizes rule and source location output", () => {
     filePath: "/project/src/App.jsx",
     sinkLoc: { start: { line: 4, column: 2 } },
     taintedPath: ["unsafe"],
+    reasonCode: "DIRECT_SINK_FLOW",
   };
   const report = buildReport("/project", new Map(), [{ filePath: finding.filePath }], [], { size: 0, edgeCount: 0 }, [], [finding], { scannedAt: "2026-01-02T03:04:05.000Z" });
   const sarif = formatSarifReport(report);
@@ -35,6 +36,7 @@ test("SARIF formatting characterizes rule and source location output", () => {
   assert.equal(result.level, "error");
   assert.equal(result.locations[0].physicalLocation.region.startLine, 4);
   assert.equal(result.locations[0].physicalLocation.artifactLocation.uri, "src/App.jsx");
+  assert.equal(result.properties.reasonCode, "DIRECT_SINK_FLOW");
 });
 
 test("summary table can sort reached sinks by configured priority", () => {

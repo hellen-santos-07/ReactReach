@@ -38,7 +38,7 @@ function validateConfig(config, knownSinkIds) {
   const overlap = (config.sinks || []).filter((id) => excluded.has(id));
   if (overlap.length) errors.push(`Sink ids cannot be both included and excluded: ${overlap.join(", ")}`);
   if (!Number.isFinite(config.minSinkPriority) || config.minSinkPriority < 0 || config.minSinkPriority > 100) errors.push("minSinkPriority must be between 0 and 100");
-  if (!["reachability", "risk", "sink-priority"].includes(config.sort)) errors.push("sort must be reachability, risk, or sink-priority");
+  if (!["reachability", "sink-priority"].includes(config.sort)) errors.push("sort must be reachability or sink-priority");
   if (!config.sinkPriorities || typeof config.sinkPriorities !== "object" || Array.isArray(config.sinkPriorities)) errors.push("sinkPriorities must be an object");
   else {
     for (const [id, priority] of Object.entries(config.sinkPriorities)) {

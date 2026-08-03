@@ -62,7 +62,7 @@ function createProgram(dependencies = {}) {
     .option("--sinks <ids>", "enable only comma-separated sink ids", parseSinkList)
     .option("--exclude-sinks <ids>", "disable comma-separated sink ids", parseSinkList)
     .option("--min-sink-priority <number>", "minimum sink priority (0-100)", parsePriority)
-    .option("--sort <mode>", "sort by reachability, risk, or sink-priority")
+    .option("--sort <mode>", "sort by reachability or sink-priority")
     .action(async (project, options) => {
       const projectPath = path.resolve(project);
       const sinkIds = listSinkRules().map((rule) => rule.id);

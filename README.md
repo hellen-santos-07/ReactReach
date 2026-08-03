@@ -114,7 +114,7 @@ reactreach scan ./app --min-sink-priority 90
 reactreach scan ./app --sort sink-priority
 ```
 
-The existing reachability ordering remains the default. `--sort risk` is accepted for forward compatibility with the risk-scoring phase; until scores are available it falls back to reachability ordering.
+The existing reachability ordering remains the default. Use `--sort sink-priority` to place findings associated with higher-priority sinks first.
 
 Project defaults can be stored in `reactreach.config.json`:
 
@@ -132,7 +132,9 @@ Project defaults can be stored in `reactreach.config.json`:
 
 CLI arguments override the project configuration, which overrides built-in defaults. Use `--config <file>` to select a different JSON file. Invalid or conflicting sink IDs fail before the scan begins.
 
-Each detected sink now includes `ruleId`, `category`, `priority`, and `confidence`. Reachability findings expose these as `sinkRuleId`, `sinkCategory`, `sinkPriority`, and `confidence`, while retaining all existing fields.
+Each detected sink includes `ruleId`, `category`, `priority`, and `confidence`. Reachability findings expose these as `sinkRuleId`, `sinkCategory`, `sinkPriority`, and `confidence`, while retaining all existing fields.
+
+Findings also contain a stable `reasonCode`, allowing report consumers to identify the analysis outcome without comparing human-readable messages.
 
 ## Adding a sink rule
 

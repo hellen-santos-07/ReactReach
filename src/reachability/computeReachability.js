@@ -371,191 +371,166 @@ function extractPropSeedIdentifiers(params, taintedPropNames) {
  *
  * When a Component Graph (graph) is provided, also performs inter-component reachability: if tainted data is passed as a prop to a child component that contains a security sink, a HIGH inter-component finding is emitted.
  */
-function computeReachability(
-  dependencyUsages,
-  components,
-  sinks,
-  graph = null,
-) {
+const REASON_CODES = Object.freeze({
+  NO_BINDING: "NO_BINDING",
+  UNUSED_IMPORT: "UNUSED_IMPORT",
+  COMPONENT_WITHOUT_SINK: "COMPONENT_WITHOUT_SINK",
+  DIRECT_SINK_FLOW: "DIRECT_SINK_FLOW",
+  PROPAGATED_SINK_FLOW: "PROPAGATED_SINK_FLOW",
+  NO_PROVEN_SINK_PATH: "NO_PROVEN_SINK_PATH",
+  INTER_COMPONENT_SINK_FLOW: "INTER_COMPONENT_SINK_FLOW",
+});
+
+const REASONS = Object.freeze({
+  [REASON_CODES.NO_BINDING]: "Vulnerable dependency imported but no binding name captured (dynamic import or bare require)",
+  [REASON_CODES.UNUSED_IMPORT]: "Vulnerable dependency imported but identifiers are never referenced in any component",
+  [REASON_CODES.COMPONENT_WITHOUT_SINK]: "Vulnerable dependency used inside React component but no security sink found in this component",
+  [REASON_CODES.DIRECT_SINK_FLOW]: "Vulnerable dependency identifier flows directly into a security sink",
+  [REASON_CODES.PROPAGATED_SINK_FLOW]: "Variable derived from vulnerable dependency reaches a security sink via React hooks or local propagation",
+  [REASON_CODES.NO_PROVEN_SINK_PATH]: "Vulnerable dependency used in a component with sinks, but no structural data path found",
+  [REASON_CODES.INTER_COMPONENT_SINK_FLOW]: "Tainted data from vulnerable dependency flows through component props boundary into a security sink in a child component",
+});
+
+function groupByFile(items) {
+  const index = new Map();
+  for (const item of items) {
+    if (!index.has(item.filePath)) index.set(item.filePath, []);
+    index.get(item.filePath).push(item);
+  }
+  return index;
+}
+
+function createAnalysisIndexes(components, sinks) {
+  const componentsByFile = groupByFile(components);
+  const sinksByFile = groupByFile(sinks);
+  const sinksByComponent = new Map();
+  for (const component of components) {
+    const componentSinks = (sinksByFile.get(component.filePath) || []).filter((sink) => isInsideComponent(sink, component));
+    sinksByComponent.set(component, componentSinks);
+  }
+  return { componentsByFile, sinksByFile, sinksByComponent };
+}
+
+function createFinding(usage, reasonCode, values) {
+  return {
+    packageName: usage.packageName,
+    filePath: usage.filePath,
+    auditSeverity: usage.auditSeverity ?? "unknown",
+    reasonCode,
+    reason: REASONS[reasonCode],
+    ...values,
+  };
+}
+
+function findRelevantComponents(usage, componentsByFile) {
+  return (componentsByFile.get(usage.filePath) || []).filter((component) =>
+    usage.importedAs.some((identifier) => identifier in component.usedImports),
+  );
+}
+
+function analyzeIntraComponent(usage, component, vulnIds, componentSinks) {
   const findings = [];
+  const tainted = computeTaintedIdentifiers(component.bodyNode, vulnIds);
+  if (componentSinks.length === 0) {
+    findings.push(createFinding(usage, REASON_CODES.COMPONENT_WITHOUT_SINK, {
+      reachability: "MEDIUM",
+      component: component.name,
+      sinkType: null,
+      sinkLoc: null,
+      taintedPath: [...usage.importedAs],
+    }));
+    return { findings, tainted };
+  }
 
-  for (const usage of dependencyUsages) {
-    const vulnIds = new Set(usage.importedAs);
-    const fileComponents = components.filter(
-      (c) => c.filePath === usage.filePath,
-    );
-    const fileSinks = sinks.filter((s) => s.filePath === usage.filePath);
+  let hasSinkPath = false;
+  for (const sink of componentSinks) {
+    const sinkIds = new Set(sink.identifiers);
+    const overlap = [...tainted].filter((identifier) => sinkIds.has(identifier));
+    if (overlap.length === 0) continue;
+    hasSinkPath = true;
+    const direct = overlap.some((identifier) => vulnIds.has(identifier));
+    const reasonCode = direct ? REASON_CODES.DIRECT_SINK_FLOW : REASON_CODES.PROPAGATED_SINK_FLOW;
+    findings.push(createFinding(usage, reasonCode, {
+      reachability: direct ? "CRITICAL" : "HIGH",
+      component: component.name,
+      sinkType: sink.sinkType,
+      sinkLoc: sink.loc,
+      ...sinkMetadata(sink),
+      taintedPath: overlap,
+    }));
+  }
+  if (!hasSinkPath) {
+    findings.push(createFinding(usage, REASON_CODES.NO_PROVEN_SINK_PATH, {
+      reachability: "MEDIUM",
+      component: component.name,
+      sinkType: null,
+      sinkLoc: null,
+      taintedPath: [...usage.importedAs],
+    }));
+  }
+  return { findings, tainted };
+}
 
-    // No binding names captured - can't trace data flow
-    if (vulnIds.size === 0) {
-      findings.push({
-        packageName: usage.packageName,
-        filePath: usage.filePath,
-        reachability: "LOW",
-        auditSeverity: usage.auditSeverity ?? "unknown",
-        reason:
-          "Vulnerable dependency imported but no binding name captured (dynamic import or bare require)",
-        component: null,
-        sinkType: null,
-        sinkLoc: null,
-        taintedPath: [],
-      });
-      continue;
-    }
-
-    // Find components that actually reference the vulnerable identifiers
-    const relevantComponents = fileComponents.filter((c) =>
-      usage.importedAs.some((id) => id in c.usedImports),
-    );
-
-    if (relevantComponents.length === 0) {
-      findings.push({
-        packageName: usage.packageName,
-        filePath: usage.filePath,
-        reachability: "NONE",
-        auditSeverity: usage.auditSeverity ?? "unknown",
-        reason:
-          "Vulnerable dependency imported but identifiers are never referenced in any component",
-        component: null,
-        sinkType: null,
-        sinkLoc: null,
-        taintedPath: [],
-      });
-      continue;
-    }
-
-    for (const component of relevantComponents) {
-      const componentSinks = fileSinks.filter((s) =>
-        isInsideComponent(s, component),
-      );
-
-      // Always compute tainted identifiers - needed for both intra- and inter-component analysis
-      const tainted = computeTaintedIdentifiers(component.bodyNode, vulnIds);
-
-      if (componentSinks.length === 0) {
-        // Component uses the dep but contains no sinks
-        findings.push({
-          packageName: usage.packageName,
-          filePath: usage.filePath,
-          reachability: "MEDIUM",
-          auditSeverity: usage.auditSeverity ?? "unknown",
-          reason:
-            "Vulnerable dependency used inside React component but no security sink found in this component",
+function analyzeInterComponent(usage, component, tainted, graph, sinksByComponent) {
+  if (!graph) return [];
+  const findings = [];
+  const taintedJSXProps = collectTaintedJSXProps(component.bodyNode, tainted);
+  for (const [childName, propNames] of taintedJSXProps) {
+    for (const childGraphNode of graph.getNodeByName(childName)) {
+      const childComponent = childGraphNode.component;
+      const childSinks = sinksByComponent.get(childComponent) || [];
+      if (childSinks.length === 0) continue;
+      const propSeedIds = extractPropSeedIdentifiers(childComponent.params, propNames);
+      if (propSeedIds.size === 0) continue;
+      const childTainted = computeTaintedIdentifiers(childComponent.bodyNode, propSeedIds);
+      for (const sink of childSinks) {
+        const sinkIds = new Set(sink.identifiers);
+        const overlap = [...childTainted].filter((identifier) => sinkIds.has(identifier));
+        if (overlap.length === 0) continue;
+        findings.push(createFinding(usage, REASON_CODES.INTER_COMPONENT_SINK_FLOW, {
+          reachability: "HIGH",
           component: component.name,
-          sinkType: null,
-          sinkLoc: null,
-          taintedPath: [...usage.importedAs],
-        });
-      } else {
-        // Intra-component sink matching
-        let componentHasSinkPath = false;
-
-        for (const sink of componentSinks) {
-          const sinkIds = new Set(sink.identifiers);
-          const overlap = [...tainted].filter((id) => sinkIds.has(id));
-
-          if (overlap.length > 0) {
-            componentHasSinkPath = true;
-
-            // Distinguish direct use vs propagated use
-            const directIds = overlap.filter((id) => vulnIds.has(id));
-            const isDirect = directIds.length > 0;
-
-            findings.push({
-              packageName: usage.packageName,
-              filePath: usage.filePath,
-              reachability: isDirect ? "CRITICAL" : "HIGH",
-              auditSeverity: usage.auditSeverity ?? "unknown",
-              reason: isDirect
-                ? "Vulnerable dependency identifier flows directly into a security sink"
-                : "Variable derived from vulnerable dependency reaches a security sink via React hooks or local propagation",
-              component: component.name,
-              sinkType: sink.sinkType,
-              sinkLoc: sink.loc,
-              ...sinkMetadata(sink),
-              taintedPath: overlap,
-            });
-          }
-        }
-
-        // Component has sinks but no proven data path
-        if (!componentHasSinkPath) {
-          findings.push({
-            packageName: usage.packageName,
-            filePath: usage.filePath,
-            reachability: "MEDIUM",
-            auditSeverity: usage.auditSeverity ?? "unknown",
-            reason:
-              "Vulnerable dependency used in a component with sinks, but no structural data path found",
-            component: component.name,
-            sinkType: null,
-            sinkLoc: null,
-            taintedPath: [...usage.importedAs],
-          });
-        }
-      }
-
-      // Inter-component analysis
-      if (graph) {
-        const taintedJSXProps = collectTaintedJSXProps(
-          component.bodyNode,
-          tainted,
-        );
-
-        for (const [childName, propNames] of taintedJSXProps) {
-          const childNodes = graph.getNodeByName(childName);
-
-          for (const childGraphNode of childNodes) {
-            const childComp = childGraphNode.component;
-            const childCompSinks = sinks.filter(
-              (s) =>
-                s.filePath === childComp.filePath &&
-                isInsideComponent(s, childComp),
-            );
-
-            if (childCompSinks.length === 0) continue;
-
-            const propSeedIds = extractPropSeedIdentifiers(
-              childComp.params,
-              propNames,
-            );
-            if (propSeedIds.size === 0) continue;
-
-            const childTainted = computeTaintedIdentifiers(
-              childComp.bodyNode,
-              propSeedIds,
-            );
-
-            for (const childSink of childCompSinks) {
-              const sinkIds = new Set(childSink.identifiers);
-              const overlap = [...childTainted].filter((id) => sinkIds.has(id));
-
-              if (overlap.length > 0) {
-                findings.push({
-                  packageName: usage.packageName,
-                  filePath: usage.filePath,
-                  reachability: "HIGH",
-                  auditSeverity: usage.auditSeverity ?? "unknown",
-                  reason:
-                    "Tainted data from vulnerable dependency flows through component props boundary into a security sink in a child component",
-                  component: component.name,
-                  childComponent: childComp.name,
-                  sinkType: childSink.sinkType,
-                  sinkLoc: childSink.loc,
-                  ...sinkMetadata(childSink),
-                  sinkFilePath: childComp.filePath,
-                  taintedPath: [...propNames, ...overlap],
-                  propagationType: "inter-component",
-                });
-              }
-            }
-          }
-        }
+          childComponent: childComponent.name,
+          sinkType: sink.sinkType,
+          sinkLoc: sink.loc,
+          ...sinkMetadata(sink),
+          sinkFilePath: childComponent.filePath,
+          taintedPath: [...propNames, ...overlap],
+          propagationType: "inter-component",
+        }));
       }
     }
   }
-
   return findings;
 }
 
+function analyzeUsage(usage, indexes, graph) {
+  const vulnIds = new Set(usage.importedAs);
+  if (vulnIds.size === 0) {
+    return [createFinding(usage, REASON_CODES.NO_BINDING, {
+      reachability: "LOW", component: null, sinkType: null, sinkLoc: null, taintedPath: [],
+    })];
+  }
+  const relevantComponents = findRelevantComponents(usage, indexes.componentsByFile);
+  if (relevantComponents.length === 0) {
+    return [createFinding(usage, REASON_CODES.UNUSED_IMPORT, {
+      reachability: "NONE", component: null, sinkType: null, sinkLoc: null, taintedPath: [],
+    })];
+  }
+  const findings = [];
+  for (const component of relevantComponents) {
+    const intra = analyzeIntraComponent(usage, component, vulnIds, indexes.sinksByComponent.get(component) || []);
+    findings.push(...intra.findings);
+    findings.push(...analyzeInterComponent(usage, component, intra.tainted, graph, indexes.sinksByComponent));
+  }
+  return findings;
+}
+
+function computeReachability(dependencyUsages, components, sinks, graph = null) {
+  const indexes = createAnalysisIndexes(components, sinks);
+  return dependencyUsages.flatMap((usage) => analyzeUsage(usage, indexes, graph));
+}
+
 module.exports = computeReachability;
+module.exports.REASON_CODES = REASON_CODES;
+module.exports.createAnalysisIndexes = createAnalysisIndexes;

@@ -16,6 +16,7 @@ test("direct flow into a sink is CRITICAL", () => {
   const findings = analyze(`import vulnerable from "vulnerable-package"; function App() { return <div dangerouslySetInnerHTML={{__html: vulnerable}} />; }`);
   assert.equal(findings.length, 1);
   assert.equal(findings[0].reachability, "CRITICAL");
+  assert.equal(findings[0].reasonCode, "DIRECT_SINK_FLOW");
   assert.equal(findings[0].sinkType, "dangerouslySetInnerHTML");
   assert.equal(findings[0].sinkRuleId, "inner-html");
   assert.equal(findings[0].sinkPriority, 100);
@@ -25,17 +26,20 @@ test("direct flow into a sink is CRITICAL", () => {
 test("local propagation into a sink is HIGH", () => {
   const findings = analyze(`import vulnerable from "vulnerable-package"; function App() { const result = transform(vulnerable); return <div dangerouslySetInnerHTML={{__html: result}} />; }`);
   assert.equal(findings[0].reachability, "HIGH");
+  assert.equal(findings[0].reasonCode, "PROPAGATED_SINK_FLOW");
   assert.deepEqual(findings[0].taintedPath, ["result"]);
 });
 
 test("unused import produces NONE", () => {
   const findings = analyze(`import vulnerable from "vulnerable-package"; function App() { return <div>safe</div>; }`);
   assert.equal(findings[0].reachability, "NONE");
+  assert.equal(findings[0].reasonCode, "UNUSED_IMPORT");
 });
 
 test("usage without captured binding produces LOW", () => {
   const findings = analyze(`function App() { return <div />; }`, []);
   assert.equal(findings[0].reachability, "LOW");
+  assert.equal(findings[0].reasonCode, "NO_BINDING");
 });
 
 test("component usage without a sink produces MEDIUM", () => {

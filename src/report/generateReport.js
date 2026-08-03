@@ -86,7 +86,6 @@ function printSummaryTable(findings, projectPath, options = {}) {
   const severitySort = (a, b) => (SEVERITY_ORDER[a.reachability] ?? 99) - (SEVERITY_ORDER[b.reachability] ?? 99);
   const sorted = [...findings].sort((a, b) => {
     if (options.sort === "sink-priority") return (b.sinkPriority ?? -1) - (a.sinkPriority ?? -1) || severitySort(a, b);
-    if (options.sort === "risk") return (b.riskScore ?? -1) - (a.riskScore ?? -1) || severitySort(a, b);
     return severitySort(a, b);
   });
 
@@ -355,6 +354,7 @@ function formatSarifReport(report) {
         packageName: f.packageName,
         reachability: f.reachability,
         auditSeverity: f.auditSeverity ?? "unknown",
+        reasonCode: f.reasonCode ?? null,
         component: f.component ?? null,
         childComponent: f.childComponent ?? null,
         sinkType: f.sinkType ?? null,
