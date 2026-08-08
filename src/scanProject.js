@@ -49,10 +49,11 @@ async function scanProject(projectPath, config = {}, dependencies = {}) {
   progress("graph", "Component graph completed", { nodes: graph.size, edges: graph.edgeCount, roots: graph.roots().length });
   const findings = await deps.reachabilityAnalyzer(dependencyUsages, components, sinks, graph, config);
   progress("reachability", "Reachability analysis completed", { count: findings.length });
+  const diagnostics = findings.diagnostics ?? [];
   const scannedAt = deps.clock().toISOString();
-  const report = await deps.reportBuilder(absolutePath, vulnerablePackages, parsedFiles, components, graph, sinks, findings, { scannedAt, config });
+  const report = await deps.reportBuilder(absolutePath, vulnerablePackages, parsedFiles, components, graph, sinks, findings, { scannedAt, config, diagnostics });
 
-  return { projectPath: absolutePath, vulnerablePackages, parsedFiles, dependencyUsages, components, sinks, graph, findings, report };
+  return { projectPath: absolutePath, vulnerablePackages, parsedFiles, dependencyUsages, components, sinks, graph, findings, diagnostics, report };
 }
 
 module.exports = { scanProject, defaultDependencies };

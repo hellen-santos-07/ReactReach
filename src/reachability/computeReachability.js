@@ -8,27 +8,32 @@ const REACT_HOOKS = new Set([
   "useReducer",
 ]);
 
-//Collects all Identifier names referenced inside the AST node subtree.
-function collectNodeIdentifiers(node) {
-  const ids = new Set();
+function collectPathBindings(nodePath) {
+  const bindings = new Set();
+  function collect(path) {
+    if (!path.isIdentifier() || !path.isReferencedIdentifier()) return;
+    const binding = path.scope.getBinding(path.node.name);
+    if (binding) bindings.add(binding);
+  }
+  collect(nodePath);
+  if (nodePath.traverse) nodePath.traverse({ Identifier: collect });
+  return bindings;
+}
 
-  function walk(n) {
-    if (!n || typeof n !== "object") return;
-    if (t.isIdentifier(n)) {
-      ids.add(n.name);
-    }
-    for (const key of t.VISITOR_KEYS[n.type] || []) {
-      const child = n[key];
-      if (Array.isArray(child)) {
-        child.forEach(walk);
-      } else if (t.isNode(child)) {
-        walk(child);
-      }
+function referencesTaint(nodePath, taintedBindings) {
+  return [...collectPathBindings(nodePath)].some((binding) => taintedBindings.has(binding));
+}
+
+function addPatternBindings(patternPath, taintedBindings) {
+  let changed = false;
+  for (const name of Object.keys(t.getBindingIdentifiers(patternPath.node))) {
+    const binding = patternPath.scope.getBinding(name);
+    if (binding && !taintedBindings.has(binding)) {
+      taintedBindings.add(binding);
+      changed = true;
     }
   }
-
-  walk(node);
-  return ids;
+  return changed;
 }
 
 /**
@@ -59,90 +64,18 @@ function getHookName(callNode) {
  * const result = useMemo(() => taintedBody, [deps]) -> result is tainted
  * const fn = useCallback(() => taintedBody, [deps]) -> fn is tainted
  */
-function collectHookTaint(bodyNode, tainted) {
-  // Maps setter name -> state variable name (e.g. "setData" -> "data")
+function collectSetterBindings(bodyPath) {
   const setterToState = new Map();
-
-  function walkHooks(node) {
-    if (!node || typeof node !== "object") return;
-
-    if (
-      t.isVariableDeclarator(node) &&
-      node.init &&
-      t.isCallExpression(node.init)
-    ) {
-      // node is the AST node from the component's body: it can be anything - variable declaration, expression, etc. We only care about variable declarations that are initialized with a call expression (potential hook call).
-      const hookName = getHookName(node.init);
-
-      if (hookName === "useState") {
-        // const [stateVar, setterVar] = useState(initialValue)
-        if (t.isArrayPattern(node.id) && node.id.elements.length >= 2) {
-          //node.id is the left-hand side of the variable declaration. We check if it's an array pattern with at least 2 elements, which matches the typical useState destructuring.
-          const stateVar = node.id.elements[0]; // The first element is the state variable
-          const setterVar = node.id.elements[1]; // The second element is the setter function
-
-          if (t.isIdentifier(stateVar) && t.isIdentifier(setterVar)) {
-            // should be simple identifiers, not patterns
-            setterToState.set(setterVar.name, stateVar.name); // Map the setter name to the state variable name for later propagation checks
-
-            // If initial value is tainted, state is tainted
-            const args = node.init.arguments;
-            if (args.length > 0) {
-              const initIds = collectNodeIdentifiers(args[0]); // collect identifiers from the initial value expression
-              if ([...initIds].some((id) => tainted.has(id))) {
-                // if any of those identifiers are tainted, we consider the state variable tainted
-                tainted.add(stateVar.name); // so... add the state variable name to the tainted set :D
-              }
-            }
-          }
-        }
-      }
-
-      if (hookName === "useMemo" || hookName === "useCallback") {
-        // const result = useMemo(() => bodyWithTainted, [deps])
-        if (t.isIdentifier(node.id)) {
-          const args = node.init.arguments;
-          if (
-            args.length > 0 &&
-            (t.isArrowFunctionExpression(args[0]) ||
-              t.isFunctionExpression(args[0]))
-          ) {
-            const callbackIds = collectNodeIdentifiers(args[0].body);
-            if ([...callbackIds].some((id) => tainted.has(id))) {
-              tainted.add(node.id.name);
-            }
-          }
-        }
-      }
-
-      if (hookName === "useReducer") {
-        // const [state, dispatch] = useReducer(reducer, initialState)
-        if (t.isArrayPattern(node.id) && node.id.elements.length >= 1) {
-          const stateVar = node.id.elements[0];
-          const args = node.init.arguments;
-          // If initialState is tainted, state is tainted
-          if (t.isIdentifier(stateVar) && args.length >= 2) {
-            const initIds = collectNodeIdentifiers(args[1]);
-            if ([...initIds].some((id) => tainted.has(id))) {
-              tainted.add(stateVar.name);
-            }
-          }
-        }
-      }
-    }
-
-    for (const key of t.VISITOR_KEYS[node.type] || []) {
-      // recursively walk the AST to find all hook calls, even if nested inside other expressions
-      const child = node[key];
-      if (Array.isArray(child)) {
-        child.forEach(walkHooks);
-      } else if (t.isNode(child)) {
-        walkHooks(child);
-      }
-    }
-  }
-
-  walkHooks(bodyNode);
+  bodyPath.traverse({
+    VariableDeclarator(path) {
+      if (!t.isArrayPattern(path.node.id) || !t.isCallExpression(path.node.init) || getHookName(path.node.init) !== "useState") return;
+      const [stateNode, setterNode] = path.node.id.elements;
+      if (!t.isIdentifier(stateNode) || !t.isIdentifier(setterNode)) return;
+      const stateBinding = path.scope.getBinding(stateNode.name);
+      const setterBinding = path.scope.getBinding(setterNode.name);
+      if (stateBinding && setterBinding) setterToState.set(setterBinding, stateBinding);
+    },
+  });
   return setterToState;
 }
 
@@ -154,67 +87,46 @@ function collectHookTaint(bodyNode, tainted) {
  * const {a, b} = taintedExpr -> a, b are tainted
  * let y = transform(tainted); y = fn(t2) -> y is tainted
  */
-function propagateTaint(bodyNode, tainted, setterToState) {
-  function propagate(node) {
-    if (!node || typeof node !== "object") return;
-
-    //setter calls: setData(taintedExpr) -> data is tainted
-    if (t.isCallExpression(node) && t.isIdentifier(node.callee)) {
-      // check if it's a call expression with an identifier callee (setData(...))
-      const stateVar = setterToState.get(node.callee.name);
-      if (stateVar && node.arguments.length > 0) {
-        const argIds = collectNodeIdentifiers(node.arguments[0]);
-        if ([...argIds].some((id) => tainted.has(id))) {
-          // if any argument identifier is tainted, the state variable is tainted
-          tainted.add(stateVar);
-        }
-      }
-    }
-
-    // variable declarations: const x = taintedExpr
-    if (t.isVariableDeclarator(node) && node.init) {
-      const initIds = collectNodeIdentifiers(node.init);
-      if ([...initIds].some((id) => tainted.has(id))) {
-        // if any identifier in the initializer is tainted, the variable is tainted
-        if (t.isIdentifier(node.id)) {
-          tainted.add(node.id.name);
-        } else if (t.isObjectPattern(node.id)) {
-          for (const prop of node.id.properties) {
-            if (prop.value && t.isIdentifier(prop.value)) {
-              tainted.add(prop.value.name);
-            }
-          }
-        } else if (t.isArrayPattern(node.id)) {
-          for (const elem of node.id.elements || []) {
-            if (t.isIdentifier(elem)) {
-              tainted.add(elem.name);
-            }
-          }
-        }
-      }
-    }
-
-    // reassignment: x = taintedExpr -> x is tainted
-    if (t.isAssignmentExpression(node) && t.isIdentifier(node.left)) {
-      const rightIds = collectNodeIdentifiers(node.right);
-      if ([...rightIds].some((id) => tainted.has(id))) {
-        // if any identifier in the right-hand side is tainted, the left-hand side is tainted
-        tainted.add(node.left.name);
-      }
-    }
-
-    for (const key of t.VISITOR_KEYS[node.type] || []) {
-      // recursively propagate through the AST to find all variable declarations and assignments, even if nested inside other expressions
-      const child = node[key];
-      if (Array.isArray(child)) {
-        child.forEach(propagate);
-      } else if (t.isNode(child)) {
-        propagate(child);
-      }
-    }
+function propagateBindingPass(bodyPath, taintedBindings, setterToState) {
+  let changed = false;
+  function add(binding) {
+    if (!binding || taintedBindings.has(binding)) return;
+    taintedBindings.add(binding);
+    changed = true;
   }
-
-  propagate(bodyNode);
+  bodyPath.traverse({
+    CallExpression(path) {
+      if (!t.isIdentifier(path.node.callee) || path.node.arguments.length === 0) return;
+      const setterBinding = path.scope.getBinding(path.node.callee.name);
+      const stateBinding = setterToState.get(setterBinding);
+      const firstArgument = path.get("arguments")[0];
+      if (stateBinding && firstArgument && referencesTaint(firstArgument, taintedBindings)) add(stateBinding);
+    },
+    VariableDeclarator(path) {
+      if (!path.node.init) return;
+      const initPath = path.get("init");
+      const idPath = path.get("id");
+      const hookName = t.isCallExpression(path.node.init) ? getHookName(path.node.init) : null;
+      if (hookName === "useState") {
+        const initial = initPath.get("arguments")[0];
+        const stateNode = t.isArrayPattern(path.node.id) ? path.node.id.elements[0] : null;
+        if (initial && t.isIdentifier(stateNode) && referencesTaint(initial, taintedBindings)) add(path.scope.getBinding(stateNode.name));
+        return;
+      }
+      if (hookName === "useReducer") {
+        const initial = initPath.get("arguments")[1];
+        const stateNode = t.isArrayPattern(path.node.id) ? path.node.id.elements[0] : null;
+        if (initial && t.isIdentifier(stateNode) && referencesTaint(initial, taintedBindings)) add(path.scope.getBinding(stateNode.name));
+        return;
+      }
+      if (referencesTaint(initPath, taintedBindings) && addPatternBindings(idPath, taintedBindings)) changed = true;
+    },
+    AssignmentExpression(path) {
+      if (!t.isIdentifier(path.node.left) || !referencesTaint(path.get("right"), taintedBindings)) return;
+      add(path.scope.getBinding(path.node.left.name));
+    },
+  });
+  return changed;
 }
 
 /**
@@ -224,19 +136,40 @@ function propagateTaint(bodyNode, tainted, setterToState) {
  * 3. propagates through local variable assignments and setter calls
  * 4. runs two passes to handle short taint chains
  */
-function computeTaintedIdentifiers(bodyNode, sourceIdentifiers) {
-  const tainted = new Set(sourceIdentifiers);
-
-  // Phase 1: Hooks analysis: detect state/setter mappings, initial taint
-  const setterToState = collectHookTaint(bodyNode, tainted);
-
-  // Phase 2: Local propagation: variables, assignments, setter calls
-  // Two passes to handle chains: const a = vuln(); const b = fn(a);
-  // just 2 passes for simplicity - in practice most taint chains are short and this avoids the complexity of a worklist algorithm
-  propagateTaint(bodyNode, tainted, setterToState);
-  propagateTaint(bodyNode, tainted, setterToState);
-
-  return tainted;
+function computeTaintedBindings(component, sourceIdentifiers, options = {}) {
+  const taintedBindings = new Set();
+  const sourceBindings = new Set();
+  const bodyPath = component.bodyPath;
+  if (!bodyPath) return { bindings: taintedBindings, sourceBindings, names: new Set(sourceIdentifiers) };
+  for (const identifier of sourceIdentifiers) {
+    const binding = component.componentPath.scope.getBinding(identifier);
+    if (binding) {
+      taintedBindings.add(binding);
+      sourceBindings.add(binding);
+    }
+  }
+  const setterToState = collectSetterBindings(bodyPath);
+  const maxIterations = options.maxIterations ?? 100;
+  let changed = true;
+  let iterations = 0;
+  while (changed && iterations < maxIterations) {
+    changed = propagateBindingPass(bodyPath, taintedBindings, setterToState);
+    iterations++;
+  }
+  if (changed) {
+    options.diagnostics?.push({
+      code: "TAINT_ITERATION_LIMIT",
+      filePath: component.filePath,
+      component: component.name,
+      maxIterations,
+      message: `Taint propagation reached the ${maxIterations}-iteration limit`,
+    });
+  }
+  return {
+    bindings: taintedBindings,
+    sourceBindings,
+    names: new Set([...taintedBindings].map((binding) => binding.identifier.name)),
+  };
 }
 
 /**
@@ -260,6 +193,18 @@ function sinkMetadata(sink) {
   };
 }
 
+function sinkOverlap(sink, taint) {
+  if (Array.isArray(sink.referencedBindings)) {
+    const bindings = sink.referencedBindings.filter((binding) => taint.bindings.has(binding));
+    return {
+      bindings,
+      names: [...new Set(bindings.map((binding) => binding.identifier.name))],
+    };
+  }
+  const names = sink.identifiers.filter((identifier) => taint.names.has(identifier));
+  return { bindings: [], names };
+}
+
 /**
  * Finds JSX attributes in a component body that pass tainted data as props to child components (PascalCase JSX elements).
  *
@@ -267,47 +212,25 @@ function sinkMetadata(sink) {
  * Only non-spread JSXAttributes whose value expression references at least
  * one tainted identifier are included.
  */
-function collectTaintedJSXProps(bodyNode, tainted) {
+function collectTaintedJSXProps(component, taint) {
   const taintedProps = new Map();
-
-  function walk(node) {
-    if (!node || typeof node !== "object") return;
-
-    if (t.isJSXOpeningElement(node)) {
-      const nameNode = node.name;
-      // Only PascalCase names (React components, not HTML elements)
-      if (t.isJSXIdentifier(nameNode) && /^[A-Z]/.test(nameNode.name)) {
-        // check if it's a JSX element with a PascalCase name, which indicates it's a React component
-        const childName = nameNode.name;
-        for (const attr of node.attributes) {
-          // iterate over the attributes of the JSX element to find props that might be tainted
-          if (!t.isJSXAttribute(attr) || !attr.name) continue; // care only about normal JSX attributes
-          const attrName =
-            typeof attr.name.name === "string" ? attr.name.name : null;
-          if (!attrName) continue;
-          const val = attr.value;
-          if (t.isJSXExpressionContainer(val)) {
-            // we only care about attributes whose value is a JSX expression, since static string values can't be tainted
-            const attrIds = collectNodeIdentifiers(val.expression);
-            if ([...attrIds].some((id) => tainted.has(id))) {
-              // if any identifier in the attribute value is tainted, the prop is tainted
-              if (!taintedProps.has(childName))
-                taintedProps.set(childName, new Set());
-              taintedProps.get(childName).add(attrName);
-            }
-          }
-        }
+  if (!component.bodyPath) return taintedProps;
+  component.bodyPath.traverse({
+    JSXOpeningElement(path) {
+      const nameNode = path.node.name;
+      if (!t.isJSXIdentifier(nameNode) || !/^[A-Z]/.test(nameNode.name)) return;
+      const childName = nameNode.name;
+      for (const attributePath of path.get("attributes")) {
+        if (!attributePath.isJSXAttribute() || !attributePath.node.name) continue;
+        const attributeName = typeof attributePath.node.name.name === "string" ? attributePath.node.name.name : null;
+        const valuePath = attributePath.get("value");
+        if (!attributeName || !valuePath.isJSXExpressionContainer()) continue;
+        if (!referencesTaint(valuePath.get("expression"), taint.bindings)) continue;
+        if (!taintedProps.has(childName)) taintedProps.set(childName, new Set());
+        taintedProps.get(childName).add(attributeName);
       }
-    }
-
-    for (const key of t.VISITOR_KEYS[node.type] || []) {
-      const child = node[key];
-      if (Array.isArray(child)) child.forEach(walk);
-      else if (t.isNode(child)) walk(child);
-    }
-  }
-
-  walk(bodyNode);
+    },
+  });
   return taintedProps;
 }
 
@@ -428,9 +351,9 @@ function findRelevantComponents(usage, componentsByFile) {
   );
 }
 
-function analyzeIntraComponent(usage, component, vulnIds, componentSinks) {
+function analyzeIntraComponent(usage, component, vulnIds, componentSinks, options) {
   const findings = [];
-  const tainted = computeTaintedIdentifiers(component.bodyNode, vulnIds);
+  const taint = computeTaintedBindings(component, vulnIds, options);
   if (componentSinks.length === 0) {
     findings.push(createFinding(usage, REASON_CODES.COMPONENT_WITHOUT_SINK, {
       reachability: "MEDIUM",
@@ -439,16 +362,16 @@ function analyzeIntraComponent(usage, component, vulnIds, componentSinks) {
       sinkLoc: null,
       taintedPath: [...usage.importedAs],
     }));
-    return { findings, tainted };
+    return { findings, taint };
   }
 
   let hasSinkPath = false;
   for (const sink of componentSinks) {
-    const sinkIds = new Set(sink.identifiers);
-    const overlap = [...tainted].filter((identifier) => sinkIds.has(identifier));
-    if (overlap.length === 0) continue;
+    const overlap = sinkOverlap(sink, taint);
+    if (overlap.names.length === 0) continue;
     hasSinkPath = true;
-    const direct = overlap.some((identifier) => vulnIds.has(identifier));
+    const direct = overlap.bindings.some((binding) => taint.sourceBindings.has(binding)) ||
+      (overlap.bindings.length === 0 && overlap.names.some((identifier) => vulnIds.has(identifier)));
     const reasonCode = direct ? REASON_CODES.DIRECT_SINK_FLOW : REASON_CODES.PROPAGATED_SINK_FLOW;
     findings.push(createFinding(usage, reasonCode, {
       reachability: direct ? "CRITICAL" : "HIGH",
@@ -456,7 +379,7 @@ function analyzeIntraComponent(usage, component, vulnIds, componentSinks) {
       sinkType: sink.sinkType,
       sinkLoc: sink.loc,
       ...sinkMetadata(sink),
-      taintedPath: overlap,
+      taintedPath: overlap.names,
     }));
   }
   if (!hasSinkPath) {
@@ -468,43 +391,73 @@ function analyzeIntraComponent(usage, component, vulnIds, componentSinks) {
       taintedPath: [...usage.importedAs],
     }));
   }
-  return { findings, tainted };
+  return { findings, taint };
 }
 
-function analyzeInterComponent(usage, component, tainted, graph, sinksByComponent) {
+function analyzeInterComponent(usage, component, initialTaint, graph, sinksByComponent, options) {
   if (!graph) return [];
   const findings = [];
-  const taintedJSXProps = collectTaintedJSXProps(component.bodyNode, tainted);
-  for (const [childName, propNames] of taintedJSXProps) {
-    for (const childGraphNode of graph.getNodeByName(childName)) {
-      const childComponent = childGraphNode.component;
-      const childSinks = sinksByComponent.get(childComponent) || [];
-      if (childSinks.length === 0) continue;
-      const propSeedIds = extractPropSeedIdentifiers(childComponent.params, propNames);
-      if (propSeedIds.size === 0) continue;
-      const childTainted = computeTaintedIdentifiers(childComponent.bodyNode, propSeedIds);
-      for (const sink of childSinks) {
-        const sinkIds = new Set(sink.identifiers);
-        const overlap = [...childTainted].filter((identifier) => sinkIds.has(identifier));
-        if (overlap.length === 0) continue;
-        findings.push(createFinding(usage, REASON_CODES.INTER_COMPONENT_SINK_FLOW, {
-          reachability: "HIGH",
-          component: component.name,
-          childComponent: childComponent.name,
-          sinkType: sink.sinkType,
-          sinkLoc: sink.loc,
-          ...sinkMetadata(sink),
-          sinkFilePath: childComponent.filePath,
-          taintedPath: [...propNames, ...overlap],
-          propagationType: "inter-component",
-        }));
+  const queue = [{
+    current: component,
+    taint: initialTaint,
+    componentPath: [component.name],
+    propagationPath: [],
+    taintedProps: [],
+    resolutionConfidence: 100,
+  }];
+  const visited = new Set();
+  while (queue.length) {
+    const state = queue.shift();
+    const outgoingProps = collectTaintedJSXProps(state.current, state.taint);
+    for (const [renderedName, propNames] of outgoingProps) {
+      const edges = graph.resolveRenderedChild
+        ? graph.resolveRenderedChild(state.current, renderedName)
+        : graph.getNodeByName(renderedName).map((node) => ({ node, resolution: "global-fallback", confidence: 60 }));
+      for (const edge of edges) {
+        const childComponent = edge.node.component;
+        if (childComponent === component) continue;
+        const propSeedIds = extractPropSeedIdentifiers(childComponent.params, propNames);
+        if (propSeedIds.size === 0) continue;
+        const visitKey = `${edge.node.key}|${[...propSeedIds].sort().join(",")}`;
+        if (visited.has(visitKey)) continue;
+        visited.add(visitKey);
+        const childTaint = computeTaintedBindings(childComponent, propSeedIds, options);
+        const componentPath = [...state.componentPath, childComponent.name];
+        const propagationStep = {
+          from: state.current.name,
+          to: childComponent.name,
+          props: [...propNames],
+          resolution: edge.resolution,
+        };
+        const propagationPath = [...state.propagationPath, propagationStep];
+        const taintedProps = [...state.taintedProps, ...propNames];
+        const resolutionConfidence = Math.min(state.resolutionConfidence, edge.confidence ?? 60);
+        for (const sink of sinksByComponent.get(childComponent) || []) {
+          const overlap = sinkOverlap(sink, childTaint);
+          if (overlap.names.length === 0) continue;
+          findings.push(createFinding(usage, REASON_CODES.INTER_COMPONENT_SINK_FLOW, {
+            reachability: "HIGH",
+            component: component.name,
+            childComponent: childComponent.name,
+            componentPath,
+            propagationPath,
+            sinkType: sink.sinkType,
+            sinkLoc: sink.loc,
+            ...sinkMetadata(sink),
+            componentResolutionConfidence: resolutionConfidence,
+            sinkFilePath: childComponent.filePath,
+            taintedPath: [...taintedProps, ...overlap.names],
+            propagationType: "inter-component",
+          }));
+        }
+        queue.push({ current: childComponent, taint: childTaint, componentPath, propagationPath, taintedProps, resolutionConfidence });
       }
     }
   }
   return findings;
 }
 
-function analyzeUsage(usage, indexes, graph) {
+function analyzeUsage(usage, indexes, graph, options) {
   const vulnIds = new Set(usage.importedAs);
   if (vulnIds.size === 0) {
     return [createFinding(usage, REASON_CODES.NO_BINDING, {
@@ -519,16 +472,20 @@ function analyzeUsage(usage, indexes, graph) {
   }
   const findings = [];
   for (const component of relevantComponents) {
-    const intra = analyzeIntraComponent(usage, component, vulnIds, indexes.sinksByComponent.get(component) || []);
+    const intra = analyzeIntraComponent(usage, component, vulnIds, indexes.sinksByComponent.get(component) || [], options);
     findings.push(...intra.findings);
-    findings.push(...analyzeInterComponent(usage, component, intra.tainted, graph, indexes.sinksByComponent));
+    findings.push(...analyzeInterComponent(usage, component, intra.taint, graph, indexes.sinksByComponent, options));
   }
   return findings;
 }
 
-function computeReachability(dependencyUsages, components, sinks, graph = null) {
+function computeReachability(dependencyUsages, components, sinks, graph = null, config = {}) {
   const indexes = createAnalysisIndexes(components, sinks);
-  return dependencyUsages.flatMap((usage) => analyzeUsage(usage, indexes, graph));
+  const diagnostics = [];
+  const options = { maxIterations: config.maxTaintIterations ?? 100, diagnostics };
+  const findings = dependencyUsages.flatMap((usage) => analyzeUsage(usage, indexes, graph, options));
+  Object.defineProperty(findings, "diagnostics", { value: diagnostics, enumerable: false });
+  return findings;
 }
 
 module.exports = computeReachability;

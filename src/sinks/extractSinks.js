@@ -1,5 +1,5 @@
 const traverse = require("@babel/traverse").default;
-const { collectReferencedIdentifiers } = require("./helpers");
+const { collectReferencedIdentifiers, collectReferencedBindings } = require("./helpers");
 const { selectSinkRules } = require("./registry");
 
 function extractSinks(parsedFiles, config = {}) {
@@ -12,6 +12,12 @@ function extractSinks(parsedFiles, config = {}) {
   }
 
   for (const file of parsedFiles) {
+    const bindingByNode = new WeakMap();
+    traverse(file.ast, {
+      Identifier(path) {
+        bindingByNode.set(path.node, path.scope.getBinding(path.node.name) || null);
+      },
+    });
     const visitors = {};
     for (const [nodeType, rules] of rulesByNodeType) {
       visitors[nodeType] = (astPath) => {
@@ -27,6 +33,7 @@ function extractSinks(parsedFiles, config = {}) {
             filePath: file.filePath,
             loc: astPath.node.loc,
             identifiers: [...collectReferencedIdentifiers(valueNode)],
+            referencedBindings: [...collectReferencedBindings(valueNode, bindingByNode)],
           });
         }
       };

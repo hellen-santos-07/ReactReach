@@ -52,3 +52,33 @@ test("summary table can sort reached sinks by configured priority", () => {
   const text = output.join("\n");
   assert.ok(text.indexOf("higher") < text.indexOf("lower"));
 });
+
+test("SARIF preserves multi-component propagation evidence and diagnostics", () => {
+  const finding = {
+    packageName: "unsafe",
+    auditSeverity: "high",
+    reachability: "HIGH",
+    reason: "inter-component flow",
+    reasonCode: "INTER_COMPONENT_SINK_FLOW",
+    component: "Parent",
+    childComponent: "GrandChild",
+    componentPath: ["Parent", "Middle", "GrandChild"],
+    propagationPath: [
+      { from: "Parent", to: "Middle", props: ["content"], resolution: "import" },
+      { from: "Middle", to: "GrandChild", props: ["html"], resolution: "import" },
+    ],
+    componentResolutionConfidence: 100,
+    propagationType: "inter-component",
+    sinkType: "dangerouslySetInnerHTML",
+    filePath: "/project/src/Parent.jsx",
+    sinkFilePath: "/project/src/GrandChild.jsx",
+    taintedPath: ["content", "html"],
+  };
+  const report = buildReport("/project", new Map(), [], [], { size: 0, edgeCount: 0 }, [], [finding], {
+    diagnostics: [{ code: "EXAMPLE" }],
+  });
+  const sarif = formatSarifReport(report);
+  assert.deepEqual(sarif.runs[0].results[0].properties.componentPath, finding.componentPath);
+  assert.deepEqual(sarif.runs[0].results[0].properties.propagationPath, finding.propagationPath);
+  assert.deepEqual(sarif.runs[0].properties.diagnostics, [{ code: "EXAMPLE" }]);
+});

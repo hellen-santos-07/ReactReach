@@ -63,29 +63,38 @@ function collectFileImports(ast) {
   return imports;
 }
 
+function collectComponentImports(ast) {
+  const imports = new Map();
+  traverse(ast, {
+    ImportDeclaration(path) {
+      const source = path.node.source.value;
+      for (const specifier of path.node.specifiers) {
+        const importedName = t.isImportDefaultSpecifier(specifier)
+          ? "default"
+          : t.isImportNamespaceSpecifier(specifier)
+            ? "*"
+            : specifier.imported.name ?? specifier.imported.value;
+        imports.set(specifier.local.name, { source, importedName, kind: "import" });
+      }
+    },
+  });
+  return imports;
+}
+
 /**
  * Collects all Identifier names referenced inside a given AST node subtree,
  * only keeping those that match known file-level imports.
  */
-function collectReferencedImports(bodyNode, fileImports) {
+function collectReferencedImports(bodyPath, fileImports, componentPath) {
   const referenced = new Set();
-
-  function walk(node) {
-    if (!node || typeof node !== "object") return;
-    if (t.isIdentifier(node) && fileImports.has(node.name)) {
-      referenced.add(node.name);
-    }
-    for (const key of t.VISITOR_KEYS[node.type] || []) {
-      const child = node[key];
-      if (Array.isArray(child)) {
-        child.forEach(walk);
-      } else if (t.isNode(child)) {
-        walk(child);
-      }
-    }
-  }
-
-  walk(bodyNode);
+  bodyPath.traverse({
+    Identifier(path) {
+      if (!path.isReferencedIdentifier() || !fileImports.has(path.node.name)) return;
+      const referencedBinding = path.scope.getBinding(path.node.name);
+      const importedBinding = componentPath.scope.getBinding(path.node.name);
+      if (referencedBinding && referencedBinding === importedBinding) referenced.add(path.node.name);
+    },
+  });
   return referenced;
 }
 
@@ -126,13 +135,15 @@ function extractComponents(parsedFiles) {
 
   for (const file of parsedFiles) {
     const fileImports = collectFileImports(file.ast);
+    const componentImports = collectComponentImports(file.ast);
 
     traverse(file.ast, {
       FunctionDeclaration(path) {
         const name = path.node.id?.name;
         if (name && /^[A-Z]/.test(name) && isJSXReturningFunction(path.node)) { // default components : should match PascalCase and return JSX
           const body = path.node.body;
-          const usedImports = collectReferencedImports(body, fileImports);
+          const bodyPath = path.get("body");
+          const usedImports = collectReferencedImports(bodyPath, fileImports, path);
           const renderedChildren = collectRenderedComponents(body);
 
           components.push({
@@ -141,10 +152,13 @@ function extractComponents(parsedFiles) {
             filePath: file.filePath,
             loc: path.node.loc,
             bodyNode: body,
+            componentPath: path,
+            bodyPath,
             usedImports: Object.fromEntries(
               [...usedImports].map((id) => [id, fileImports.get(id)])
             ),
             renderedComponents: [...renderedChildren],
+            componentImports: Object.fromEntries(componentImports),
             params: path.node.params
           });
         }
@@ -161,7 +175,9 @@ function extractComponents(parsedFiles) {
           isJSXReturningFunction(init)
         ) { 
           const body = init.body;
-          const usedImports = collectReferencedImports(body, fileImports);
+          const componentPath = path.get("init");
+          const bodyPath = componentPath.get("body");
+          const usedImports = collectReferencedImports(bodyPath, fileImports, componentPath);
           const renderedChildren = collectRenderedComponents(body);
 
           components.push({
@@ -170,10 +186,13 @@ function extractComponents(parsedFiles) {
             filePath: file.filePath,
             loc: path.node.loc,
             bodyNode: body,
+            componentPath,
+            bodyPath,
             usedImports: Object.fromEntries(
               [...usedImports].map((id) => [id, fileImports.get(id)])
             ),
             renderedComponents: [...renderedChildren],
+            componentImports: Object.fromEntries(componentImports),
             params: init.params
           });
         }
@@ -193,7 +212,8 @@ function extractComponents(parsedFiles) {
           )
         ) {
           const body = path.node.body;
-          const usedImports = collectReferencedImports(body, fileImports);
+          const bodyPath = path.get("body");
+          const usedImports = collectReferencedImports(bodyPath, fileImports, path);
           const renderedChildren = collectRenderedComponents(body);
 
           components.push({
@@ -202,10 +222,13 @@ function extractComponents(parsedFiles) {
             filePath: file.filePath,
             loc: path.node.loc,
             bodyNode: body,
+            componentPath: path,
+            bodyPath,
             usedImports: Object.fromEntries(
               [...usedImports].map((id) => [id, fileImports.get(id)])
             ),
             renderedComponents: [...renderedChildren], // to build the component graph, we need those to resolve these names to actual components in a later step
+            componentImports: Object.fromEntries(componentImports),
             params: null // class components access props via this.props
           });
         }

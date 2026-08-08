@@ -56,6 +56,7 @@ function buildReport(
     projectPath,
     scannedAt: options.scannedAt ?? new Date().toISOString(),
     configuration: options.config ?? {},
+    diagnostics: options.diagnostics ?? [],
     summary: {
       vulnerablePackages: vulnerablePackages.size,
       sourceFiles: parsedFiles.length,
@@ -364,6 +365,9 @@ function formatSarifReport(report) {
         confidence: f.confidence ?? null,
         taintedPath: f.taintedPath ?? [],
         propagationType: f.propagationType ?? "intra-component",
+        componentPath: f.componentPath ?? null,
+        propagationPath: f.propagationPath ?? null,
+        componentResolutionConfidence: f.componentResolutionConfidence ?? null,
       },
     };
 
@@ -410,6 +414,7 @@ function formatSarifReport(report) {
         properties: {
           scannedAt,
           summary: report.summary,
+          diagnostics: report.diagnostics ?? [],
           vulnerablePackages: (report.packages ?? []).map((p) => ({
             name: p.name,
             severity: p.severity,

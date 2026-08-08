@@ -45,3 +45,8 @@ test("configuration rejects the same sink in include and exclude lists", () => {
     /both included and excluded/,
   );
 });
+
+test("configuration validates the taint iteration limit", () => {
+  assert.equal(validateConfig({ ...DEFAULT_CONFIG, maxTaintIterations: 250 }, ids).maxTaintIterations, 250);
+  assert.throws(() => validateConfig({ ...DEFAULT_CONFIG, maxTaintIterations: 0 }, ids), /maxTaintIterations/);
+});

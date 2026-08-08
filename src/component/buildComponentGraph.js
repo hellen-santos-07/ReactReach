@@ -20,6 +20,7 @@
  * - React does not allow true rendering cycles at runtime, but the extraction is structural. All BFS traversals are cycle-safe via a visited set.
  * - Self-references (a component rendering itself) are ignored as they do not contribute to inter-component reachability.
  */
+const path = require("path");
 
 /**
  * Produces the unique node key for a given (filePath, componentName) pair.
@@ -29,6 +30,14 @@
  */
 function makeKey(filePath, name) {
   return `${filePath}#${name}`;
+}
+
+function moduleKeys(filePath) {
+  const normalized = path.normalize(filePath);
+  const withoutExtension = normalized.replace(/\.(?:js|jsx|ts|tsx)$/, "");
+  const keys = [withoutExtension];
+  if (path.basename(withoutExtension) === "index") keys.push(path.dirname(withoutExtension));
+  return keys;
 }
 
 /**
@@ -71,6 +80,7 @@ function buildComponentGraph(components) {
 
   /** @type {Map<string, GraphNode[]>} name -> [nodes] for resolution */
   const byName = new Map();
+  const byModulePath = new Map();
 
   for (const component of components) {
     const key = makeKey(component.filePath, component.name);
@@ -85,6 +95,7 @@ function buildComponentGraph(components) {
       children: [], // GraphNode[] rendered by this component
       parents: [], // GraphNode[] that render this component
       unresolvedChildren: [], // string[]  names that could not be resolved
+      childEdges: [],
     };
 
     nodes.set(key, node);
@@ -93,6 +104,10 @@ function buildComponentGraph(components) {
       byName.set(component.name, []);
     }
     byName.get(component.name).push(node);
+    for (const moduleKey of moduleKeys(component.filePath)) {
+      if (!byModulePath.has(moduleKey)) byModulePath.set(moduleKey, []);
+      byModulePath.get(moduleKey).push(node);
+    }
   }
 
   // step 2: resolve edges from renderedComponents
@@ -102,6 +117,18 @@ function buildComponentGraph(components) {
     const { component } = node;
     const rendered = component.renderedComponents || [];
 
+    function connect(childNode, renderedName, resolution, confidence) {
+      if (childNode === node) return;
+      if (!node.children.includes(childNode)) {
+        node.children.push(childNode);
+        childNode.parents.push(node);
+        edgeCount++;
+      }
+      if (!node.childEdges.some((edge) => edge.node === childNode && edge.renderedName === renderedName)) {
+        node.childEdges.push({ node: childNode, renderedName, resolution, confidence });
+      }
+    }
+
     for (const childName of rendered) {
       // Skip self-references (should not occur, but guard anyway)
       if (childName === component.name) continue;
@@ -109,29 +136,33 @@ function buildComponentGraph(components) {
       // Stage 1 - same-file match
       const sameFileKey = makeKey(component.filePath, childName);
       if (nodes.has(sameFileKey)) {
-        const childNode = nodes.get(sameFileKey);
-        if (!node.children.includes(childNode)) {
-          node.children.push(childNode);
-          childNode.parents.push(node);
-          edgeCount++;
-        }
+        connect(nodes.get(sameFileKey), childName, "same-file", 100);
         continue;
       }
 
-      // Stage 2 - global (cross-file) fallback
+      // Stage 2 - resolve relative imports to their actual module.
+      const importInfo = component.componentImports?.[childName];
+      if (importInfo?.source?.startsWith(".")) {
+        const importKey = path.normalize(path.resolve(path.dirname(component.filePath), importInfo.source));
+        const importedCandidates = byModulePath.get(importKey) || [];
+        const named = importInfo.importedName !== "default" && importInfo.importedName !== "*"
+          ? importedCandidates.filter((candidate) => candidate.component.name === importInfo.importedName)
+          : importedCandidates.filter((candidate) => candidate.component.name === childName);
+        const resolved = named.length ? named : importedCandidates.length === 1 ? importedCandidates : [];
+        if (resolved.length) {
+          for (const childNode of resolved) connect(childNode, childName, "import", 100);
+          continue;
+        }
+      }
+
+      // Stage 3 - global (cross-file) fallback
       const candidates = byName.get(childName);
       if (candidates && candidates.length > 0) {
-        for (const childNode of candidates) {
-          if (!node.children.includes(childNode)) {
-            node.children.push(childNode);
-            childNode.parents.push(node);
-            edgeCount++;
-          }
-        }
+        for (const childNode of candidates) connect(childNode, childName, "global-fallback", 60);
         continue;
       }
 
-      // Stage 3 - unresolved (third-party component or HTML element)
+      // Stage 4 - unresolved (third-party component or HTML element)
       if (!node.unresolvedChildren.includes(childName)) {
         node.unresolvedChildren.push(childName);
       }
@@ -169,6 +200,11 @@ function buildComponentGraph(components) {
      */
     getNodeByName(name) {
       return byName.get(name) || [];
+    },
+
+    resolveRenderedChild(component, renderedName) {
+      const parent = nodes.get(makeKey(component.filePath, component.name));
+      return parent ? parent.childEdges.filter((edge) => edge.renderedName === renderedName) : [];
     },
 
     /**

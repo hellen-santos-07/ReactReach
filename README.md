@@ -126,7 +126,8 @@ Project defaults can be stored in `reactreach.config.json`:
   "sinkPriorities": {
     "location": 90
   },
-  "sort": "sink-priority"
+  "sort": "sink-priority",
+  "maxTaintIterations": 100
 }
 ```
 
@@ -135,6 +136,18 @@ CLI arguments override the project configuration, which overrides built-in defau
 Each detected sink includes `ruleId`, `category`, `priority`, and `confidence`. Reachability findings expose these as `sinkRuleId`, `sinkCategory`, `sinkPriority`, and `confidence`, while retaining all existing fields.
 
 Findings also contain a stable `reasonCode`, allowing report consumers to identify the analysis outcome without comparing human-readable messages.
+
+## Structural reachability details
+
+Local taint propagation follows Babel bindings rather than identifier text. Variables with the same name in different lexical scopes are therefore kept separate. Propagation continues until no new bindings become tainted, supporting chains of arbitrary practical length instead of a fixed number of passes.
+
+`maxTaintIterations` is a defensive limit between 1 and 10,000. If it is reached, the scan continues and records a `TAINT_ITERATION_LIMIT` entry in the report's `diagnostics` array.
+
+Inter-component analysis follows tainted props across multiple component boundaries. Relative imports are used to resolve rendered components before falling back to a conservative name match. Inter-component findings include:
+
+- `componentPath`: ordered component names from the dependency usage to the sink.
+- `propagationPath`: each props boundary and its resolution method.
+- `componentResolutionConfidence`: 100 for same-file/import resolution and 60 when global name fallback was required.
 
 ## Adding a sink rule
 

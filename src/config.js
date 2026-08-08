@@ -7,6 +7,7 @@ const DEFAULT_CONFIG = Object.freeze({
   minSinkPriority: 0,
   sinkPriorities: {},
   sort: "reachability",
+  maxTaintIterations: 100,
 });
 
 function mergeConfig(fileConfig = {}, cliConfig = {}) {
@@ -39,6 +40,7 @@ function validateConfig(config, knownSinkIds) {
   if (overlap.length) errors.push(`Sink ids cannot be both included and excluded: ${overlap.join(", ")}`);
   if (!Number.isFinite(config.minSinkPriority) || config.minSinkPriority < 0 || config.minSinkPriority > 100) errors.push("minSinkPriority must be between 0 and 100");
   if (!["reachability", "sink-priority"].includes(config.sort)) errors.push("sort must be reachability or sink-priority");
+  if (!Number.isInteger(config.maxTaintIterations) || config.maxTaintIterations < 1 || config.maxTaintIterations > 10000) errors.push("maxTaintIterations must be an integer between 1 and 10000");
   if (!config.sinkPriorities || typeof config.sinkPriorities !== "object" || Array.isArray(config.sinkPriorities)) errors.push("sinkPriorities must be an object");
   else {
     for (const [id, priority] of Object.entries(config.sinkPriorities)) {
