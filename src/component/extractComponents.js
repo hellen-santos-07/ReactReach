@@ -1,4 +1,4 @@
-const traverse = require("@babel/traverse").default;
+const ASTWalker = require("../ast/ASTWalker");
 const t = require("@babel/types");
 
 function isJSXReturningFunction(node) {
@@ -20,21 +20,20 @@ function isJSXReturningFunction(node) {
   return false;
 }
 
-/**
- * Collects the set of file-level imported identifiers that exist in this file AST.
- * Returns a Map: identifierName, packageSource
- */
-function collectFileImports(ast) {
-  const imports = new Map();
-
-  traverse(ast, {
+function createImportVisitors(fileImports, componentImports) {
+  return {
     ImportDeclaration(path) {
       const source = path.node.source.value;
-      for (const spec of path.node.specifiers) {
-        imports.set(spec.local.name, source);
+      for (const specifier of path.node.specifiers) {
+        fileImports.set(specifier.local.name, source);
+        const importedName = t.isImportDefaultSpecifier(specifier)
+          ? "default"
+          : t.isImportNamespaceSpecifier(specifier)
+            ? "*"
+            : specifier.imported.name ?? specifier.imported.value;
+        componentImports.set(specifier.local.name, { source, importedName, kind: "import" });
       }
     },
-    // Also handle const x = require("pkg")
     VariableDeclarator(path) {
       const init = path.node.init;
       if (
@@ -48,37 +47,17 @@ function collectFileImports(ast) {
         const source = init.arguments[0].value;
         const id = path.node.id;
         if (id.type === "Identifier") {
-          imports.set(id.name, source);
+          fileImports.set(id.name, source);
         } else if (id.type === "ObjectPattern") {
           for (const prop of id.properties) {
             if (prop.value && prop.value.type === "Identifier") {
-              imports.set(prop.value.name, source);
+              fileImports.set(prop.value.name, source);
             }
           }
         }
       }
     }
-  });
-
-  return imports;
-}
-
-function collectComponentImports(ast) {
-  const imports = new Map();
-  traverse(ast, {
-    ImportDeclaration(path) {
-      const source = path.node.source.value;
-      for (const specifier of path.node.specifiers) {
-        const importedName = t.isImportDefaultSpecifier(specifier)
-          ? "default"
-          : t.isImportNamespaceSpecifier(specifier)
-            ? "*"
-            : specifier.imported.name ?? specifier.imported.value;
-        imports.set(specifier.local.name, { source, importedName, kind: "import" });
-      }
-    },
-  });
-  return imports;
+  };
 }
 
 /**
@@ -130,14 +109,18 @@ function collectRenderedComponents(bodyNode) {
   return rendered;
 }
 
-function extractComponents(parsedFiles) {
-  const components = [];
+class ComponentWalker extends ASTWalker {
+  createFileContext() {
+    return { fileImports: new Map(), componentImports: new Map() };
+  }
 
-  for (const file of parsedFiles) {
-    const fileImports = collectFileImports(file.ast);
-    const componentImports = collectComponentImports(file.ast);
+  createPreVisitors(_file, fileContext) {
+    return createImportVisitors(fileContext.fileImports, fileContext.componentImports);
+  }
 
-    traverse(file.ast, {
+  createVisitors(file, fileContext, _context, components) {
+    const { fileImports, componentImports } = fileContext;
+    return {
       FunctionDeclaration(path) {
         const name = path.node.id?.name;
         if (name && /^[A-Z]/.test(name) && isJSXReturningFunction(path.node)) { // default components : should match PascalCase and return JSX
@@ -233,10 +216,16 @@ function extractComponents(parsedFiles) {
           });
         }
       }
-    });
+    };
   }
+}
 
-  return components;
+function extractComponents(parsedFiles) {
+  return new ComponentWalker().walk(parsedFiles);
 }
 
 module.exports = extractComponents;
+module.exports.ComponentWalker = ComponentWalker;
+module.exports.isJSXReturningFunction = isJSXReturningFunction;
+module.exports.collectReferencedImports = collectReferencedImports;
+module.exports.collectRenderedComponents = collectRenderedComponents;

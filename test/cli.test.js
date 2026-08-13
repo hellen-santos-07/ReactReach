@@ -44,3 +44,30 @@ test("invalid sink ids return configuration exit code 2", () => {
   assert.equal(result.status, 2);
   assert.match(result.stderr, /Unknown sink id: missing/);
 });
+
+test("CLI loads project-local sink plugins before invoking the scan pipeline", async () => {
+  const pluginProject = path.join(__dirname, "..", "fixtures", "plugin-project");
+  let receivedConfig;
+  const originalLog = console.log;
+  console.log = () => {};
+  try {
+    await createProgram({
+      scanProject: async (_project, config) => {
+        receivedConfig = config;
+        return { findings: [], report: {} };
+      },
+    }).parseAsync(["node", "reactreach", "scan", pluginProject]);
+  } finally {
+    console.log = originalLog;
+  }
+  assert.deepEqual(receivedConfig.sinks, ["custom-alert"]);
+  assert.ok(receivedConfig.sinkRules.some((rule) => rule.id === "custom-alert"));
+  assert.equal(Object.keys(receivedConfig).includes("sinkRules"), false);
+});
+
+test("invalid local sink modules return configuration exit code 2", () => {
+  const invalidProject = path.join(__dirname, "..", "fixtures", "invalid-plugin-project");
+  const result = spawnSync(process.execPath, ["src/cli.js", "scan", invalidProject], { cwd: root, encoding: "utf8" });
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /Unable to resolve sink module/);
+});

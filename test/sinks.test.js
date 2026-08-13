@@ -1,8 +1,9 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const path = require("node:path");
 const extractSinks = require("../src/sinks/extractSinks");
 const { parseSnippet } = require("./helpers/parseSnippet");
-const { listSinkRules, selectSinkRules, validateRule } = require("../src/sinks/registry");
+const { listSinkRules, selectSinkRules, validateRule, loadSinkRules } = require("../src/sinks/registry");
 
 test("extractSinks characterizes all currently supported sink families", () => {
   const file = parseSnippet(`
@@ -83,4 +84,49 @@ test("extractor applies selected rules and configured priorities", () => {
 
 test("registry rejects malformed custom rules", () => {
   assert.throws(() => validateRule({ id: "invalid" }), /missing/);
+});
+
+test("project configuration loads a custom strategy without changing the plugin host", () => {
+  const pluginProject = path.join(__dirname, "..", "fixtures", "plugin-project");
+  const sinkRules = loadSinkRules({
+    modules: ["./rules/customAlert.js"],
+    basePath: pluginProject,
+    includeDefault: true,
+  });
+  assert.ok(sinkRules.some((rule) => rule.id === "eval"));
+  assert.ok(sinkRules.some((rule) => rule.id === "custom-alert"));
+
+  const sinks = extractSinks([parseSnippet("alert(message); eval(code);")], {
+    sinkRules,
+    sinks: ["custom-alert"],
+  });
+  assert.deepEqual(sinks.map((sink) => [sink.ruleId, sink.sinkType, sink.priority]), [
+    ["custom-alert", "custom.alert", 65],
+  ]);
+});
+
+test("plugin loading rejects missing modules as configuration errors", () => {
+  const pluginProject = path.join(__dirname, "..", "fixtures", "invalid-plugin-project");
+  assert.throws(
+    () => loadSinkRules({ modules: ["./rules/missing.js"], basePath: pluginProject }),
+    (error) => error.code === "INVALID_CONFIG" && /Unable to resolve sink module/.test(error.message),
+  );
+});
+
+test("plugin modules cannot escape the configuration directory", () => {
+  const pluginProject = path.join(__dirname, "..", "fixtures", "plugin-project");
+  assert.throws(
+    () => loadSinkRules({ modules: ["../outside.js"], basePath: pluginProject }),
+    (error) => error.code === "INVALID_CONFIG" && /escapes the configuration directory/.test(error.message),
+  );
+});
+
+test("project configuration can replace all built-in sink strategies", () => {
+  const pluginProject = path.join(__dirname, "..", "fixtures", "plugin-project");
+  const sinkRules = loadSinkRules({
+    modules: ["./rules/customAlert.js"],
+    basePath: pluginProject,
+    includeDefault: false,
+  });
+  assert.deepEqual(sinkRules.map((rule) => rule.id), ["custom-alert"]);
 });

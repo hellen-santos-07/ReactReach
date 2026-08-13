@@ -127,7 +127,9 @@ Project defaults can be stored in `reactreach.config.json`:
     "location": 90
   },
   "sort": "sink-priority",
-  "maxTaintIterations": 100
+  "maxTaintIterations": 100,
+  "includeDefaultSinks": true,
+  "sinkModules": []
 }
 ```
 
@@ -149,9 +151,13 @@ Inter-component analysis follows tainted props across multiple component boundar
 - `propagationPath`: each props boundary and its resolution method.
 - `componentResolutionConfidence`: 100 for same-file/import resolution and 60 when global name fallback was required.
 
+## AST traversal architecture
+
+Dependency usage, component extraction, and sink extraction specialise the shared `ASTWalker` Template Method. Its `walk()` operation fixes the lifecycle for every parsed file: create the result, prepare file context, optionally execute a pre-pass, execute the specialised Babel visitor, and finalise the result. The specialised walkers provide visitors and file-specific context without duplicating the orchestration skeleton.
+
 ## Adding a sink rule
 
-Sink rules are modules under `src/sinks/rules` and are registered in `src/sinks/registry.js`. A rule declares its metadata, Babel visitor node type, matcher, and the AST value whose referenced identifiers should be tracked:
+The built-in Strategy rules are aggregated by the local registry `src/sinks/rules/index.js`. A rule module exports one rule object or an array of rules. Each rule declares its metadata, Babel visitor node type, matcher, and the AST value whose referenced identifiers should be tracked:
 
 ```js
 {
@@ -166,7 +172,19 @@ Sink rules are modules under `src/sinks/rules` and are registered in `src/sinks/
 }
 ```
 
-The central extractor does not need to be changed when another rule is added to the registry.
+Projects can extend or replace the built-in rule set without changing the plugin host, registry, or reachability analysis. Additional modules are declared directly in the project's single `reactreach.config.json` file:
+
+```json
+{
+  "includeDefaultSinks": true,
+  "sinkModules": ["./security/rules/customAlert.js"],
+  "sinks": ["eval", "custom-alert"]
+}
+```
+
+`includeDefaultSinks: true` retains the built-in strategies; `false` replaces them with only the rules exported by `sinkModules`. Module paths are resolved relative to `reactreach.config.json`; they must be local, relative, and remain inside its directory. Every exported rule is validated for required metadata, functions, priorities, confidence, and duplicate IDs before scanning begins. Invalid modules fail as configuration errors with exit code 2.
+
+The built-in registry is deterministic, version-controlled with the source code, and does not use the network. Projects do not need to create a separate catalogue file.
 
 # Input
 

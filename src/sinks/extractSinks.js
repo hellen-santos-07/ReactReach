@@ -1,25 +1,37 @@
-const traverse = require("@babel/traverse").default;
+const ASTWalker = require("../ast/ASTWalker");
 const { collectReferencedIdentifiers, collectReferencedBindings } = require("./helpers");
 const { selectSinkRules } = require("./registry");
 
-function extractSinks(parsedFiles, config = {}) {
-  const sinks = [];
-  const selectedRules = config.rules || selectSinkRules(config);
-  const rulesByNodeType = new Map();
-  for (const rule of selectedRules) {
-    if (!rulesByNodeType.has(rule.nodeType)) rulesByNodeType.set(rule.nodeType, []);
-    rulesByNodeType.get(rule.nodeType).push(rule);
+/**
+ * Specialised AST walker and Plugin Host for sink-rule strategies.
+ */
+class SinkWalker extends ASTWalker {
+  constructor(config = {}, options = {}) {
+    super(options);
+    this.config = config;
+    this.selectedRules = config.rules || selectSinkRules(config, config.sinkRules || null);
+    this.rulesByNodeType = new Map();
+    for (const rule of this.selectedRules) {
+      if (!this.rulesByNodeType.has(rule.nodeType)) this.rulesByNodeType.set(rule.nodeType, []);
+      this.rulesByNodeType.get(rule.nodeType).push(rule);
+    }
   }
 
-  for (const file of parsedFiles) {
-    const bindingByNode = new WeakMap();
-    traverse(file.ast, {
+  createFileContext() {
+    return { bindingByNode: new WeakMap() };
+  }
+
+  createPreVisitors(_file, fileContext) {
+    return {
       Identifier(path) {
-        bindingByNode.set(path.node, path.scope.getBinding(path.node.name) || null);
+        fileContext.bindingByNode.set(path.node, path.scope.getBinding(path.node.name) || null);
       },
-    });
+    };
+  }
+
+  createVisitors(file, fileContext, _context, sinks) {
     const visitors = {};
-    for (const [nodeType, rules] of rulesByNodeType) {
+    for (const [nodeType, rules] of this.rulesByNodeType) {
       visitors[nodeType] = (astPath) => {
         for (const rule of rules) {
           if (!rule.match(astPath, { file })) continue;
@@ -33,14 +45,18 @@ function extractSinks(parsedFiles, config = {}) {
             filePath: file.filePath,
             loc: astPath.node.loc,
             identifiers: [...collectReferencedIdentifiers(valueNode)],
-            referencedBindings: [...collectReferencedBindings(valueNode, bindingByNode)],
+            referencedBindings: [...collectReferencedBindings(valueNode, fileContext.bindingByNode)],
           });
         }
       };
     }
-    traverse(file.ast, visitors);
+    return visitors;
   }
-  return sinks;
+}
+
+function extractSinks(parsedFiles, config = {}) {
+  return new SinkWalker(config).walk(parsedFiles);
 }
 
 module.exports = extractSinks;
+module.exports.SinkWalker = SinkWalker;

@@ -1,4 +1,4 @@
-const traverse = require("@babel/traverse").default;
+const ASTWalker = require("../ast/ASTWalker");
 
 /**
  * Resolves a module specifier ("lodash/get") to the base package name that would appear in npm audit ("lodash").
@@ -69,13 +69,16 @@ function extractRequireBindings(callPath) {
  * importedAs: Array<string> (the local variable names that import this package)
  * auditSeverity: string (the severity level of the vulnerability from npm audit)
  */
-function extractDependencyUsage(parsedFiles, vulnerablePackages) {
-  const results = [];
+class DependencyUsageWalker extends ASTWalker {
+  constructor(vulnerablePackages, options = {}) {
+    super(options);
+    this.vulnerablePackages = vulnerablePackages;
+  }
 
-  for (const file of parsedFiles) {
-    const { ast, filePath } = file;
-
-    traverse(ast, {
+  createVisitors(file, _fileContext, _context, results) {
+    const { filePath } = file;
+    const vulnerablePackages = this.vulnerablePackages;
+    return {
       // static import
       ImportDeclaration(path) {
         const source = path.node.source.value;
@@ -142,10 +145,15 @@ function extractDependencyUsage(parsedFiles, vulnerablePackages) {
           }
         }
       }
-    });
+    };
   }
+}
 
-  return results;
+function extractDependencyUsage(parsedFiles, vulnerablePackages) {
+  return new DependencyUsageWalker(vulnerablePackages).walk(parsedFiles);
 }
 
 module.exports = extractDependencyUsage;
+module.exports.DependencyUsageWalker = DependencyUsageWalker;
+module.exports.resolveVulnerablePackage = resolveVulnerablePackage;
+module.exports.extractRequireBindings = extractRequireBindings;

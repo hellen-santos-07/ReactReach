@@ -3,8 +3,8 @@
 const { Command } = require("commander");
 const path = require("path");
 const { scanProject } = require("./scanProject");
-const { loadConfig } = require("./config");
-const { listSinkRules } = require("./sinks/registry");
+const { loadConfig, validateConfig } = require("./config");
+const { listSinkRules, loadSinkRules } = require("./sinks/registry");
 const { printSummaryTable, saveReport, saveSarifReport } = require("./report/generateReport");
 
 function parseSinkList(value) {
@@ -65,8 +65,7 @@ function createProgram(dependencies = {}) {
     .option("--sort <mode>", "sort by reachability or sink-priority")
     .action(async (project, options) => {
       const projectPath = path.resolve(project);
-      const sinkIds = listSinkRules().map((rule) => rule.id);
-      const { config, configPath } = loadConfig(projectPath, {
+      const loaded = loadConfig(projectPath, {
         configPath: options.config,
         cliConfig: {
           sinks: options.sinks,
@@ -74,7 +73,15 @@ function createProgram(dependencies = {}) {
           minSinkPriority: options.minSinkPriority,
           sort: options.sort,
         },
-      }, sinkIds);
+      });
+      const sinkRules = loadSinkRules({
+        modules: loaded.config.sinkModules,
+        basePath: loaded.config.sinkModuleBase,
+        includeDefault: loaded.config.includeDefaultSinks,
+      });
+      const config = validateConfig(loaded.config, sinkRules.map((rule) => rule.id));
+      Object.defineProperty(config, "sinkRules", { value: sinkRules, enumerable: false });
+      const { configPath } = loaded;
       console.log("ReactReach scanning project:");
       console.log(projectPath);
       if (configPath) console.log(`Configuration: ${configPath}`);

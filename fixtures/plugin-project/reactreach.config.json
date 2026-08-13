@@ -1,0 +1,5 @@
+{
+  "includeDefaultSinks": true,
+  "sinkModules": ["./rules/customAlert.js"],
+  "sinks": ["custom-alert"]
+}

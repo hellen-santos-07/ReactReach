@@ -8,6 +8,8 @@ const DEFAULT_CONFIG = Object.freeze({
   sinkPriorities: {},
   sort: "reachability",
   maxTaintIterations: 100,
+  includeDefaultSinks: true,
+  sinkModules: [],
 });
 
 function mergeConfig(fileConfig = {}, cliConfig = {}) {
@@ -24,17 +26,28 @@ function mergeConfig(fileConfig = {}, cliConfig = {}) {
   };
 }
 
-function validateStringArray(value, field, errors) {
-  if (value !== null && !Array.isArray(value)) errors.push(`${field} must be an array of sink ids`);
-  else if (Array.isArray(value) && value.some((item) => typeof item !== "string" || !item.trim())) errors.push(`${field} must contain non-empty sink ids`);
+function validateStringArray(value, field, errors, itemDescription = "sink ids") {
+  if (value !== null && !Array.isArray(value)) errors.push(`${field} must be an array of ${itemDescription}`);
+  else if (Array.isArray(value) && value.some((item) => typeof item !== "string" || !item.trim())) errors.push(`${field} must contain non-empty ${itemDescription}`);
 }
 
-function validateConfig(config, knownSinkIds) {
+function validateConfig(config, knownSinkIds = null) {
   const errors = [];
   validateStringArray(config.sinks, "sinks", errors);
   validateStringArray(config.excludeSinks, "excludeSinks", errors);
-  const known = new Set(knownSinkIds);
-  for (const id of [...(config.sinks || []), ...(config.excludeSinks || [])]) if (!known.has(id)) errors.push(`Unknown sink id: ${id}`);
+  validateStringArray(config.sinkModules, "sinkModules", errors, "module paths");
+  if (typeof config.includeDefaultSinks !== "boolean") errors.push("includeDefaultSinks must be boolean");
+  if (Array.isArray(config.sinkModules)) {
+    for (const moduleEntry of config.sinkModules) {
+      if (typeof moduleEntry === "string" && (path.isAbsolute(moduleEntry) || /^[a-z][a-z0-9+.-]*:/i.test(moduleEntry))) {
+        errors.push(`sinkModules entries must be relative local paths: ${moduleEntry}`);
+      }
+    }
+  }
+  const known = knownSinkIds === null ? null : new Set(knownSinkIds);
+  if (known) {
+    for (const id of [...(config.sinks || []), ...(config.excludeSinks || [])]) if (!known.has(id)) errors.push(`Unknown sink id: ${id}`);
+  }
   const excluded = new Set(config.excludeSinks || []);
   const overlap = (config.sinks || []).filter((id) => excluded.has(id));
   if (overlap.length) errors.push(`Sink ids cannot be both included and excluded: ${overlap.join(", ")}`);
@@ -44,7 +57,7 @@ function validateConfig(config, knownSinkIds) {
   if (!config.sinkPriorities || typeof config.sinkPriorities !== "object" || Array.isArray(config.sinkPriorities)) errors.push("sinkPriorities must be an object");
   else {
     for (const [id, priority] of Object.entries(config.sinkPriorities)) {
-      if (!known.has(id)) errors.push(`Unknown sink priority id: ${id}`);
+      if (known && !known.has(id)) errors.push(`Unknown sink priority id: ${id}`);
       if (!Number.isFinite(priority) || priority < 0 || priority > 100) errors.push(`Priority for ${id} must be between 0 and 100`);
     }
   }
@@ -56,7 +69,7 @@ function validateConfig(config, knownSinkIds) {
   return config;
 }
 
-function loadConfig(projectPath, options = {}, knownSinkIds = []) {
+function loadConfig(projectPath, options = {}, knownSinkIds = null) {
   const configPath = options.configPath
     ? path.resolve(options.configPath)
     : path.join(projectPath, "reactreach.config.json");
@@ -74,8 +87,13 @@ function loadConfig(projectPath, options = {}, knownSinkIds = []) {
     error.code = "INVALID_CONFIG";
     throw error;
   }
+  const configExists = fs.existsSync(configPath);
   const config = validateConfig(mergeConfig(fileConfig, options.cliConfig), knownSinkIds);
-  return { config, configPath: fs.existsSync(configPath) ? configPath : null };
+  Object.defineProperty(config, "sinkModuleBase", {
+    value: configExists ? path.dirname(configPath) : projectPath,
+    enumerable: false,
+  });
+  return { config, configPath: configExists ? configPath : null };
 }
 
 module.exports = { DEFAULT_CONFIG, mergeConfig, validateConfig, loadConfig };

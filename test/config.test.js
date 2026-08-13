@@ -2,7 +2,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const path = require("node:path");
 const { DEFAULT_CONFIG, mergeConfig, validateConfig, loadConfig } = require("../src/config");
-const { listSinkRules } = require("../src/sinks/registry");
+const { listSinkRules, loadSinkRules } = require("../src/sinks/registry");
 
 const ids = listSinkRules().map((rule) => rule.id);
 
@@ -49,4 +49,25 @@ test("configuration rejects the same sink in include and exclude lists", () => {
 test("configuration validates the taint iteration limit", () => {
   assert.equal(validateConfig({ ...DEFAULT_CONFIG, maxTaintIterations: 250 }, ids).maxTaintIterations, 250);
   assert.throws(() => validateConfig({ ...DEFAULT_CONFIG, maxTaintIterations: 0 }, ids), /maxTaintIterations/);
+});
+
+test("configuration exposes project-local sink modules before validating custom rule ids", () => {
+  const project = path.join(__dirname, "..", "fixtures", "plugin-project");
+  const loaded = loadConfig(project);
+  assert.deepEqual(loaded.config.sinkModules, ["./rules/customAlert.js"]);
+  assert.equal(loaded.config.sinkModuleBase, project);
+  assert.equal(Object.keys(loaded.config).includes("sinkModuleBase"), false);
+  const customIds = loadSinkRules({
+    modules: loaded.config.sinkModules,
+    basePath: loaded.config.sinkModuleBase,
+    includeDefault: loaded.config.includeDefaultSinks,
+  }).map((rule) => rule.id);
+  assert.ok(customIds.includes("custom-alert"));
+  assert.equal(validateConfig(loaded.config, customIds).sinks[0], "custom-alert");
+});
+
+test("configuration rejects invalid sink module settings", () => {
+  assert.throws(() => validateConfig({ ...DEFAULT_CONFIG, sinkModules: 42 }, ids), /sinkModules/);
+  assert.throws(() => validateConfig({ ...DEFAULT_CONFIG, includeDefaultSinks: "yes" }, ids), /includeDefaultSinks/);
+  assert.throws(() => validateConfig({ ...DEFAULT_CONFIG, sinkModules: [path.resolve("rule.js")] }, ids), /relative local paths/);
 });
