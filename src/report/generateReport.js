@@ -11,6 +11,7 @@ const SEVERITY_COLOUR = {
   NONE: "\x1b[90m", // grey
 };
 const RESET = "\x1b[0m";
+const SUMMARY_WIDTHS = Object.freeze({ sev: 8, audit: 10, pkg: 20, comp: 22, sink: 28, file: 36 });
 
 /** Truncates a string to maxLen chars, appending "…" if cut. */
 function trunc(str, maxLen) {
@@ -57,6 +58,7 @@ function buildReport(
     scannedAt: options.scannedAt ?? new Date().toISOString(),
     configuration: options.config ?? {},
     diagnostics: options.diagnostics ?? [],
+    timings: options.timings ?? {},
     summary: {
       vulnerablePackages: vulnerablePackages.size,
       sourceFiles: parsedFiles.length,
@@ -72,6 +74,67 @@ function buildReport(
   };
 }
 
+function severityRank(reachability) {
+  return SEVERITY_ORDER[reachability] ?? 99;
+}
+
+function sortFindings(findings, sortMode) {
+  const severitySort = (left, right) => severityRank(left.reachability) - severityRank(right.reachability);
+  return [...findings].sort((left, right) => {
+    if (sortMode !== "sink-priority") return severitySort(left, right);
+    return (right.sinkPriority ?? -1) - (left.sinkPriority ?? -1) || severitySort(left, right);
+  });
+}
+
+function formatSummaryRow(severity, audit, packageName, component, sink, file, colour = "") {
+  const width = SUMMARY_WIDTHS;
+  return `${colour}${severity.padEnd(width.sev)}${RESET}  ` +
+    `${trunc(audit, width.audit).padEnd(width.audit)}  ` +
+    `${trunc(packageName, width.pkg).padEnd(width.pkg)}  ` +
+    `${trunc(component, width.comp).padEnd(width.comp)}  ` +
+    `${trunc(sink, width.sink).padEnd(width.sink)}  ` +
+    `${trunc(file, width.file)}`;
+}
+
+function summaryDivider() {
+  const width = SUMMARY_WIDTHS;
+  return "-".repeat(width.sev + width.audit + width.pkg + width.comp + width.sink + width.file + 10);
+}
+
+function findingSummaryLabels(finding, projectPath) {
+  return {
+    component: finding.childComponent ? `${finding.component} -> ${finding.childComponent}` : (finding.component ?? "-"),
+    sink: finding.sinkType ?? "-",
+    file: rel(finding.sinkFilePath ?? finding.filePath, projectPath),
+    audit: finding.auditSeverity ?? "-",
+    colour: SEVERITY_COLOUR[finding.reachability] ?? "",
+  };
+}
+
+function printFindingRows(findings, projectPath) {
+  for (const finding of findings) {
+    const labels = findingSummaryLabels(finding, projectPath);
+    console.log(formatSummaryRow(
+      finding.reachability,
+      labels.audit,
+      finding.packageName,
+      labels.component,
+      labels.sink,
+      labels.file,
+      labels.colour,
+    ));
+  }
+}
+
+function formatLevelSummary(findings) {
+  const counts = {};
+  for (const finding of findings) counts[finding.reachability] = (counts[finding.reachability] ?? 0) + 1;
+  return Object.entries(counts)
+    .sort(([left], [right]) => severityRank(left) - severityRank(right))
+    .map(([level, count]) => `${SEVERITY_COLOUR[level]}${level}: ${count}${RESET}`)
+    .join("  ");
+}
+
 /**
  * Prints a colour-coded findings summary table to stdout, sorted by severity.
  *
@@ -84,65 +147,14 @@ function printSummaryTable(findings, projectPath, options = {}) {
     return;
   }
 
-  const severitySort = (a, b) => (SEVERITY_ORDER[a.reachability] ?? 99) - (SEVERITY_ORDER[b.reachability] ?? 99);
-  const sorted = [...findings].sort((a, b) => {
-    if (options.sort === "sink-priority") return (b.sinkPriority ?? -1) - (a.sinkPriority ?? -1) || severitySort(a, b);
-    return severitySort(a, b);
-  });
-
-  // Column widths (characters)
-  const W = { sev: 8, audit: 10, pkg: 20, comp: 22, sink: 28, file: 36 };
-
-  const row = (sev, audit, pkg, comp, sink, file, colour = "") =>
-    `${colour}${sev.padEnd(W.sev)}${RESET}  ` +
-    `${trunc(audit, W.audit).padEnd(W.audit)}  ` +
-    `${trunc(pkg, W.pkg).padEnd(W.pkg)}  ` +
-    `${trunc(comp, W.comp).padEnd(W.comp)}  ` +
-    `${trunc(sink, W.sink).padEnd(W.sink)}  ` +
-    `${trunc(file, W.file)}`;
-
-  const divider = "-".repeat(
-    W.sev + W.audit + W.pkg + W.comp + W.sink + W.file + 10,
-  );
-
+  const sorted = sortFindings(findings, options.sort);
+  const divider = summaryDivider();
   console.log("\n=== Findings Summary ===");
-  console.log(
-    row("LEVEL", "AUDIT SEV", "PACKAGE", "COMPONENT", "SINK", "FILE"),
-  );
+  console.log(formatSummaryRow("LEVEL", "AUDIT SEV", "PACKAGE", "COMPONENT", "SINK", "FILE"));
   console.log(divider);
-
-  for (const f of sorted) {
-    const compLabel = f.childComponent
-      ? `${f.component} -> ${f.childComponent}`
-      : (f.component ?? "-");
-    const sinkLabel = f.sinkType ?? "-";
-    const fileLabel = rel(f.sinkFilePath ?? f.filePath, projectPath);
-    const auditLabel = f.auditSeverity ?? "-";
-    const colour = SEVERITY_COLOUR[f.reachability] ?? "";
-    console.log(
-      row(
-        f.reachability,
-        auditLabel,
-        f.packageName,
-        compLabel,
-        sinkLabel,
-        fileLabel,
-        colour,
-      ),
-    );
-  }
-
+  printFindingRows(sorted, projectPath);
   console.log(divider);
-
-  // Per-level counts footer
-  const counts = {};
-  for (const f of findings)
-    counts[f.reachability] = (counts[f.reachability] ?? 0) + 1;
-  const summary = Object.entries(counts)
-    .sort(([a], [b]) => (SEVERITY_ORDER[a] ?? 99) - (SEVERITY_ORDER[b] ?? 99))
-    .map(([k, v]) => `${SEVERITY_COLOUR[k]}${k}: ${v}${RESET}`)
-    .join("  ");
-  console.log(`\nTotal: ${findings.length}  |  ${summary}`);
+  console.log(`\nTotal: ${findings.length}  |  ${formatLevelSummary(findings)}`);
 }
 
 /**
@@ -394,7 +406,7 @@ function formatSarifReport(report) {
 
   return {
     $schema:
-      "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Documents/CommitteeSpecifications/2.1.0/sarif-schema-2.1.0.json",
+      "https://docs.oasis-open.org/sarif/sarif/v2.1.0/errata01/os/schemas/sarif-schema-2.1.0.json",
     version: "2.1.0",
     runs: [
       {
@@ -415,6 +427,7 @@ function formatSarifReport(report) {
           scannedAt,
           summary: report.summary,
           diagnostics: report.diagnostics ?? [],
+          timings: report.timings ?? {},
           vulnerablePackages: (report.packages ?? []).map((p) => ({
             name: p.name,
             severity: p.severity,

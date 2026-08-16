@@ -96,6 +96,10 @@ reactreach scan <path-to-your-project>
 ```
 ReactReach will analyse the project and report contextual information about dependency vulnerabilities.
 
+Use `--json` when stdout must contain only the findings JSON array. Progress and human-readable headings are suppressed in this mode. Use `--output <file>` for the complete versioned report, including configuration, diagnostics, summary, packages, findings, and timings.
+
+The CLI uses exit code `0` for success, `1` for project/audit/parse/execution failures, and `2` for invalid configuration or sink plugins.
+
 ## Sink selection and prioritisation
 
 List the available sink rules and their default metadata:
@@ -139,6 +143,8 @@ Each detected sink includes `ruleId`, `category`, `priority`, and `confidence`. 
 
 Findings also contain a stable `reasonCode`, allowing report consumers to identify the analysis outcome without comparing human-readable messages.
 
+The complete report records `auditMs`, `parseMs`, `dependenciesMs`, `componentsMs`, `sinksMs`, `graphMs`, `reachabilityMs`, `reportMs`, `staticAnalysisMs`, and `totalMs`. `staticAnalysisMs` deliberately excludes `npm audit` and report serialisation so performance experiments can measure the static analysis pipeline independently of network latency.
+
 ## Structural reachability details
 
 Local taint propagation follows Babel bindings rather than identifier text. Variables with the same name in different lexical scopes are therefore kept separate. Propagation continues until no new bindings become tainted, supporting chains of arbitrary practical length instead of a fixed number of passes.
@@ -151,9 +157,30 @@ Inter-component analysis follows tainted props across multiple component boundar
 - `propagationPath`: each props boundary and its resolution method.
 - `componentResolutionConfidence`: 100 for same-file/import resolution and 60 when global name fallback was required.
 
+### Reachability classification chain
+
+Reachability outcomes are assigned by a Chain of Responsibility. `ReachabilityHandler` defines delegation through `setNext()` and `handle()`, while concrete handlers classify no binding (LOW), unused imports (NONE), components without sinks or without a proven path (MEDIUM), propagated and inter-component flows (HIGH), and direct sink flows (CRITICAL). The chain is ordered so that direct flow takes precedence over propagated flow. It is invoked for every analysis candidate, so separate sinks can still produce multiple findings for one dependency usage.
+
+The handlers classify evidence already produced by dependency, component, sink, taint, and CoG analysis; they do not change the underlying propagation algorithm or the meaning of existing levels and reason codes.
+
 ## AST traversal architecture
 
 Dependency usage, component extraction, and sink extraction specialise the shared `ASTWalker` Template Method. Its `walk()` operation fixes the lifecycle for every parsed file: create the result, prepare file context, optionally execute a pre-pass, execute the specialised Babel visitor, and finalise the result. The specialised walkers provide visitors and file-specific context without duplicating the orchestration skeleton.
+
+## Quality metrics
+
+Run the test suite, coverage, and McCabe cyclomatic complexity measurements with:
+
+```bash
+npm test
+npm run test:coverage
+npm run test:schema
+npm run metrics:complexity
+```
+
+The complexity command analyses `src/**/*.js` by default and accepts explicit glob patterns after `--`. It counts a base path plus decision points for conditionals, non-default switch cases, loops, catch clauses, and short-circuit logical operators, and reports per-function details as JSON.
+
+`test:schema` validates a representative complete report against `schemas/reactreach-report.schema.json` and validates the corresponding SARIF document against the official OASIS SARIF 2.1.0 Plus Errata 01 schema. The latter check retrieves the authoritative schema and therefore requires network access.
 
 ## Adding a sink rule
 

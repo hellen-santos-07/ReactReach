@@ -9,9 +9,11 @@
   "scripts": {
     "start": "node src/cli.js",
     "dev": "nodemon src/cli.js",
-    "test": "node --test",
-    "test:watch": "node --test --watch",
-    "test:coverage": "node --test --experimental-test-coverage"
+    "test": "node --test test/*.test.js",
+    "test:watch": "node --test --watch test/*.test.js",
+    "test:coverage": "node --test --experimental-test-coverage --test-coverage-lines=90 --test-coverage-branches=75 --test-coverage-functions=85 test/*.test.js",
+    "test:schema": "node scripts/validateSchemas.js",
+    "metrics:complexity": "node scripts/measureComplexity.js"
   },
   "dependencies": {
     "@babel/parser": "^7.29.0",
@@ -21,6 +23,8 @@
     "fast-glob": "^3.3.3"
   },
   "devDependencies": {
+    "ajv": "^8.17.1",
+    "ajv-draft-04": "^1.0.0",
     "nodemon": "^3.1.14"
   }
 }

@@ -59,9 +59,6 @@ ehthumbs.db
 *.swo
 *~
 
-# npm package lock
-package-lock.json
-
 # pnpm lock
 pnpm-lock.yaml
 

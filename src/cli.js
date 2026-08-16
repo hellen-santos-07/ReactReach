@@ -32,6 +32,10 @@ function consoleProgress(event) {
   if (labels[event.stage]) console.log(labels[event.stage]);
 }
 
+function exitCodeForError(error) {
+  return error.code === "INVALID_CONFIG" ? 2 : 1;
+}
+
 function resolveOutput(projectPath, filePath) {
   if (path.isAbsolute(filePath) || /^\.{1,2}[\\/]/.test(filePath)) return path.resolve(filePath);
   return path.join(projectPath, filePath);
@@ -82,23 +86,24 @@ function createProgram(dependencies = {}) {
       const config = validateConfig(loaded.config, sinkRules.map((rule) => rule.id));
       Object.defineProperty(config, "sinkRules", { value: sinkRules, enumerable: false });
       const { configPath } = loaded;
-      console.log("ReactReach scanning project:");
-      console.log(projectPath);
-      if (configPath) console.log(`Configuration: ${configPath}`);
-      const { findings, report } = await scanner(projectPath, config, { logger: consoleProgress });
+      if (!options.json) {
+        console.log("ReactReach scanning project:");
+        console.log(projectPath);
+        if (configPath) console.log(`Configuration: ${configPath}`);
+      }
+      const { findings, report } = await scanner(projectPath, config, { logger: options.json ? null : consoleProgress });
       if (options.json) {
-        console.log("\n=== Findings (JSON) ===");
         console.log(JSON.stringify(findings, null, 2));
       } else printSummaryTable(findings, projectPath + "/", { sort: config.sort });
       if (options.output) {
         const outPath = resolveOutput(projectPath, options.output);
         saveReport(report, outPath);
-        console.log(`\nJSON report saved to: ${outPath}`);
+        if (!options.json) console.log(`\nJSON report saved to: ${outPath}`);
       }
       if (options.sarif) {
         const outPath = resolveOutput(projectPath, options.sarif);
         saveSarifReport(report, outPath);
-        console.log(`\nSARIF report saved to: ${outPath}`);
+        if (!options.json) console.log(`\nSARIF report saved to: ${outPath}`);
       }
     });
   return program;
@@ -109,9 +114,9 @@ async function main(argv = process.argv) {
   try { await program.parseAsync(argv); }
   catch (error) {
     console.error(error.message);
-    process.exitCode = ["PROJECT_NOT_FOUND", "INVALID_PROJECT_PATH", "INVALID_CONFIG"].includes(error.code) ? 2 : 1;
+    process.exitCode = exitCodeForError(error);
   }
 }
 if (require.main === module) main();
 
-module.exports = { program, createProgram, resolveOutput, consoleProgress, parseSinkList, parsePriority, main };
+module.exports = { program, createProgram, resolveOutput, consoleProgress, parseSinkList, parsePriority, exitCodeForError, main };

@@ -31,41 +31,72 @@ function validateStringArray(value, field, errors, itemDescription = "sink ids")
   else if (Array.isArray(value) && value.some((item) => typeof item !== "string" || !item.trim())) errors.push(`${field} must contain non-empty ${itemDescription}`);
 }
 
-function validateConfig(config, knownSinkIds = null) {
-  const errors = [];
-  validateStringArray(config.sinks, "sinks", errors);
-  validateStringArray(config.excludeSinks, "excludeSinks", errors);
+function validateModuleSettings(config, errors) {
   validateStringArray(config.sinkModules, "sinkModules", errors, "module paths");
   if (typeof config.includeDefaultSinks !== "boolean") errors.push("includeDefaultSinks must be boolean");
-  if (Array.isArray(config.sinkModules)) {
-    for (const moduleEntry of config.sinkModules) {
-      if (typeof moduleEntry === "string" && (path.isAbsolute(moduleEntry) || /^[a-z][a-z0-9+.-]*:/i.test(moduleEntry))) {
-        errors.push(`sinkModules entries must be relative local paths: ${moduleEntry}`);
-      }
+  for (const moduleEntry of Array.isArray(config.sinkModules) ? config.sinkModules : []) {
+    if (typeof moduleEntry === "string" && (path.isAbsolute(moduleEntry) || /^[a-z][a-z0-9+.-]*:/i.test(moduleEntry))) {
+      errors.push(`sinkModules entries must be relative local paths: ${moduleEntry}`);
     }
   }
-  const known = knownSinkIds === null ? null : new Set(knownSinkIds);
-  if (known) {
-    for (const id of [...(config.sinks || []), ...(config.excludeSinks || [])]) if (!known.has(id)) errors.push(`Unknown sink id: ${id}`);
-  }
-  const excluded = new Set(config.excludeSinks || []);
-  const overlap = (config.sinks || []).filter((id) => excluded.has(id));
+}
+
+function validateKnownSinkIds(config, known, errors) {
+  if (!known) return;
+  const selectedIds = [
+    ...(Array.isArray(config.sinks) ? config.sinks : []),
+    ...(Array.isArray(config.excludeSinks) ? config.excludeSinks : []),
+  ];
+  for (const id of selectedIds) if (!known.has(id)) errors.push(`Unknown sink id: ${id}`);
+}
+
+function validateSinkSelection(config, known, errors) {
+  validateStringArray(config.sinks, "sinks", errors);
+  validateStringArray(config.excludeSinks, "excludeSinks", errors);
+  validateKnownSinkIds(config, known, errors);
+  const excluded = new Set(Array.isArray(config.excludeSinks) ? config.excludeSinks : []);
+  const overlap = (Array.isArray(config.sinks) ? config.sinks : []).filter((id) => excluded.has(id));
   if (overlap.length) errors.push(`Sink ids cannot be both included and excluded: ${overlap.join(", ")}`);
-  if (!Number.isFinite(config.minSinkPriority) || config.minSinkPriority < 0 || config.minSinkPriority > 100) errors.push("minSinkPriority must be between 0 and 100");
-  if (!["reachability", "sink-priority"].includes(config.sort)) errors.push("sort must be reachability or sink-priority");
-  if (!Number.isInteger(config.maxTaintIterations) || config.maxTaintIterations < 1 || config.maxTaintIterations > 10000) errors.push("maxTaintIterations must be an integer between 1 and 10000");
-  if (!config.sinkPriorities || typeof config.sinkPriorities !== "object" || Array.isArray(config.sinkPriorities)) errors.push("sinkPriorities must be an object");
-  else {
-    for (const [id, priority] of Object.entries(config.sinkPriorities)) {
-      if (known && !known.has(id)) errors.push(`Unknown sink priority id: ${id}`);
-      if (!Number.isFinite(priority) || priority < 0 || priority > 100) errors.push(`Priority for ${id} must be between 0 and 100`);
-    }
+}
+
+function isNumberBetween(value, minimum, maximum) {
+  return Number.isFinite(value) && value >= minimum && value <= maximum;
+}
+
+function validateScalarSettings(config, errors) {
+  if (!isNumberBetween(config.minSinkPriority, 0, 100)) errors.push("minSinkPriority must be between 0 and 100");
+  if (!new Set(["reachability", "sink-priority"]).has(config.sort)) errors.push("sort must be reachability or sink-priority");
+  const validIterationLimit = Number.isInteger(config.maxTaintIterations) && isNumberBetween(config.maxTaintIterations, 1, 10000);
+  if (!validIterationLimit) errors.push("maxTaintIterations must be an integer between 1 and 10000");
+}
+
+function validateSinkPriorities(config, known, errors) {
+  const priorities = config.sinkPriorities;
+  if (!priorities || typeof priorities !== "object" || Array.isArray(priorities)) {
+    errors.push("sinkPriorities must be an object");
+    return;
   }
-  if (errors.length) {
-    const error = new Error(`Invalid configuration:\n- ${errors.join("\n- ")}`);
-    error.code = "INVALID_CONFIG";
-    throw error;
+  for (const [id, priority] of Object.entries(priorities)) {
+    if (known && !known.has(id)) errors.push(`Unknown sink priority id: ${id}`);
+    if (!isNumberBetween(priority, 0, 100)) errors.push(`Priority for ${id} must be between 0 and 100`);
   }
+}
+
+function throwInvalidConfiguration(errors) {
+  if (errors.length === 0) return;
+  const error = new Error(`Invalid configuration:\n- ${errors.join("\n- ")}`);
+  error.code = "INVALID_CONFIG";
+  throw error;
+}
+
+function validateConfig(config, knownSinkIds = null) {
+  const errors = [];
+  const known = knownSinkIds === null ? null : new Set(knownSinkIds);
+  validateSinkSelection(config, known, errors);
+  validateModuleSettings(config, errors);
+  validateScalarSettings(config, errors);
+  validateSinkPriorities(config, known, errors);
+  throwInvalidConfiguration(errors);
   return config;
 }
 

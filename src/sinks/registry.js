@@ -1,4 +1,5 @@
 const path = require("path");
+const t = require("@babel/types");
 
 const REQUIRED_FIELDS = ["id", "name", "category", "defaultPriority", "confidence", "nodeType", "match", "getValueNode"];
 
@@ -22,18 +23,48 @@ function invalidConfig(message, cause) {
   return error;
 }
 
-function validateRule(rule) {
+function assertRuleObject(rule) {
   if (!rule || typeof rule !== "object" || Array.isArray(rule)) throw invalidConfig("Invalid sink rule: expected an object");
+}
+
+function assertRequiredFields(rule) {
   const missing = REQUIRED_FIELDS.filter((field) => rule[field] === undefined);
   if (missing.length) throw invalidConfig(`Invalid sink rule: missing ${missing.join(", ")}`);
+}
+
+function assertNonEmptyField(rule, field) {
+  if (typeof rule[field] !== "string" || !rule[field].trim()) {
+    throw invalidConfig(`Invalid sink rule ${rule.id}: ${field} must be a non-empty string`);
+  }
+}
+
+function assertRuleIdentity(rule) {
   if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(rule.id)) throw invalidConfig(`Invalid sink rule id: ${rule.id}`);
-  if (typeof rule.name !== "string" || !rule.name.trim()) throw invalidConfig(`Invalid sink rule ${rule.id}: name must be a non-empty string`);
-  if (typeof rule.category !== "string" || !rule.category.trim()) throw invalidConfig(`Invalid sink rule ${rule.id}: category must be a non-empty string`);
-  if (typeof rule.nodeType !== "string" || !rule.nodeType.trim()) throw invalidConfig(`Invalid sink rule ${rule.id}: nodeType must be a non-empty string`);
+  for (const field of ["name", "category", "nodeType"]) assertNonEmptyField(rule, field);
+  if (!Object.prototype.hasOwnProperty.call(t.VISITOR_KEYS, rule.nodeType)) {
+    throw invalidConfig(`Invalid sink rule ${rule.id}: unsupported Babel nodeType ${rule.nodeType}`);
+  }
+}
+
+function assertRuleFunctions(rule) {
   if (typeof rule.match !== "function" || typeof rule.getValueNode !== "function") throw invalidConfig(`Invalid sink rule ${rule.id}: match and getValueNode must be functions`);
   if (rule.getSinkType !== undefined && typeof rule.getSinkType !== "function") throw invalidConfig(`Invalid sink rule ${rule.id}: getSinkType must be a function`);
-  if (!Number.isFinite(rule.defaultPriority) || rule.defaultPriority < 0 || rule.defaultPriority > 100) throw invalidConfig(`Invalid sink rule ${rule.id}: defaultPriority must be between 0 and 100`);
-  if (!Number.isFinite(rule.confidence) || rule.confidence < 0 || rule.confidence > 100) throw invalidConfig(`Invalid sink rule ${rule.id}: confidence must be between 0 and 100`);
+}
+
+function assertPercentageField(rule, field) {
+  const value = rule[field];
+  if (!Number.isFinite(value) || value < 0 || value > 100) {
+    throw invalidConfig(`Invalid sink rule ${rule.id}: ${field} must be between 0 and 100`);
+  }
+}
+
+function validateRule(rule) {
+  assertRuleObject(rule);
+  assertRequiredFields(rule);
+  assertRuleIdentity(rule);
+  assertRuleFunctions(rule);
+  assertPercentageField(rule, "defaultPriority");
+  assertPercentageField(rule, "confidence");
   return rule;
 }
 

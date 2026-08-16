@@ -1,4 +1,38 @@
-const { execSync } = require("child_process");
+const { execFileSync } = require("node:child_process");
+
+function auditError(message, cause) {
+  const error = new Error(message);
+  error.code = "AUDIT_FAILED";
+  if (cause) error.cause = cause;
+  return error;
+}
+
+function isRecord(value) {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function auditFailureDetail(error) {
+  return error.summary || error.message || error.code || "npm audit returned an error";
+}
+
+function validateAuditDocument(auditData) {
+  if (!isRecord(auditData)) throw auditError("Dependency audit returned an invalid document");
+  if (auditData.error) throw auditError(`Dependency audit failed: ${auditFailureDetail(auditData.error)}`);
+  if (!isRecord(auditData.vulnerabilities)) {
+    throw auditError("Dependency audit document does not contain a vulnerabilities object");
+  }
+  return auditData;
+}
+
+function parseAuditOutput(output) {
+  let auditData;
+  try {
+    auditData = JSON.parse(String(output));
+  } catch (cause) {
+    throw auditError(`Dependency audit returned invalid JSON: ${cause.message}`, cause);
+  }
+  return validateAuditDocument(auditData);
+}
 
 /**
  *
@@ -23,22 +57,23 @@ const { execSync } = require("child_process");
  * nodes: Array<string> (the specific dependency paths that lead to the vulnerable package)
  * fixAvailable: boolean (whether a fix is available for this vulnerability)
  */
-function runAudit(projectPath) {
+function runAudit(projectPath, _config = {}, dependencies = {}) {
+  const executor = dependencies.auditExecutor || execFileSync;
+  const npmCommand = dependencies.npmCommand || (process.platform === "win32" ? "npm.cmd" : "npm");
   let auditData;
   try {
-    const result = execSync("npm audit --json", {
+    const result = executor(npmCommand, ["audit", "--json"], {
       cwd: projectPath,
       encoding: "utf8",
       stdio: "pipe",
     });
 
-    auditData = JSON.parse(result);
-  } catch (error) {
-    if (error.stdout) {
-      auditData = JSON.parse(error.stdout);
-    } else {
-      throw error;
-    }
+    auditData = parseAuditOutput(result);
+  } catch (cause) {
+    if (cause.code === "AUDIT_FAILED") throw cause;
+    const stdout = cause.stdout === undefined || cause.stdout === null ? "" : String(cause.stdout).trim();
+    if (stdout) auditData = parseAuditOutput(stdout);
+    else throw auditError(`Unable to execute npm audit: ${cause.message}`, cause);
   }
 
   return extractVulnerablePackages(auditData);
@@ -70,4 +105,7 @@ function extractVulnerablePackages(auditData) {
 module.exports = {
   runAudit,
   extractVulnerablePackages,
+  parseAuditOutput,
+  auditError,
+  validateAuditDocument,
 };

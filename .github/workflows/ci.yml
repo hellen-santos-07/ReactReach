@@ -1,0 +1,37 @@
+name: ReactReach quality gates
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    name: Node 24 / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Run tests and enforce coverage thresholds
+        run: npm run test:coverage
+
+      - name: Enforce cyclomatic complexity limit
+        run: npm run metrics:complexity
+
+      - name: Validate JSON and official SARIF schemas
+        if: runner.os == 'Linux'
+        run: npm run test:schema

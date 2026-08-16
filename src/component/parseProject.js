@@ -1,7 +1,13 @@
 const fs = require("fs");
-const path = require("path");
 const fg = require("fast-glob");
 const parser = require("@babel/parser");
+
+function compareSourcePaths(left, right) {
+  const normalizedLeft = left.replace(/\\/g, "/");
+  const normalizedRight = right.replace(/\\/g, "/");
+  if (normalizedLeft === normalizedRight) return 0;
+  return normalizedLeft < normalizedRight ? -1 : 1;
+}
 
 function getSourceFiles(projectPath) {
   return fg.sync("src/**/*.{js,jsx,ts,tsx}", {
@@ -12,26 +18,42 @@ function getSourceFiles(projectPath) {
       "**/dist/**",
       "**/build/**"
     ]
-  });
+  }).sort(compareSourcePaths);
 }
 
 function parseFile(filePath) {
-  const code = fs.readFileSync(filePath, "utf8");
+  let code;
+  try {
+    code = fs.readFileSync(filePath, "utf8");
+  } catch (cause) {
+    const error = new Error(`Unable to read source file ${filePath}: ${cause.message}`);
+    error.code = "SOURCE_READ_FAILED";
+    error.filePath = filePath;
+    error.cause = cause;
+    throw error;
+  }
 
-  const ast = parser.parse(code, {
-    sourceType: "unambiguous",
-    plugins: [
-      "jsx",
-      "typescript",
-      "classProperties",
-      "objectRestSpread",
-      "optionalChaining",
-      "nullishCoalescingOperator",
-      "decorators-legacy"
-    ]
-  });
-
-  return { code, ast };
+  try {
+    const ast = parser.parse(code, {
+      sourceType: "unambiguous",
+      plugins: [
+        "jsx",
+        "typescript",
+        "classProperties",
+        "objectRestSpread",
+        "optionalChaining",
+        "nullishCoalescingOperator",
+        "decorators-legacy"
+      ]
+    });
+    return { code, ast };
+  } catch (cause) {
+    const error = new SyntaxError(`Unable to parse source file ${filePath}: ${cause.message}`);
+    error.code = "PARSE_FAILED";
+    error.filePath = filePath;
+    error.cause = cause;
+    throw error;
+  }
 }
 
 /**
@@ -54,5 +76,6 @@ function parseProject(projectPath) {
 module.exports = {
   parseProject,
   parseFile,
-  getSourceFiles
+  getSourceFiles,
+  compareSourcePaths,
 };

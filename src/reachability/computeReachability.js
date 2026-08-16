@@ -1,4 +1,6 @@
 const t = require("@babel/types");
+const { REASON_CODES, REASONS } = require("./classification");
+const createReachabilityChain = require("./handlers/createReachabilityChain");
 
 // React hooks that propagate data and need taint tracking
 const REACT_HOOKS = new Set([
@@ -134,7 +136,7 @@ function propagateBindingPass(bodyPath, taintedBindings, setterToState) {
  * 1. seeds with the vulnerable dependency's imported identifiers
  * 2. propagates through hooks (useState, useMemo, useCallback, useReducer)
  * 3. propagates through local variable assignments and setter calls
- * 4. runs two passes to handle short taint chains
+ * 4. iterates to a fixed point, bounded by maxIterations
  */
 function computeTaintedBindings(component, sourceIdentifiers, options = {}) {
   const taintedBindings = new Set();
@@ -243,41 +245,38 @@ function collectTaintedJSXProps(component, taint) {
  * - Rest element: function Comp({ ...rest }) -> seeds "rest" (conservative)
  * - Class components (null params): returns empty set
  */
-function extractPropSeedIdentifiers(params, taintedPropNames) {
+function propertyKeyName(property) {
+  if (t.isIdentifier(property.key)) return property.key.name;
+  return t.isStringLiteral(property.key) ? property.key.value : null;
+}
+
+function localPatternName(value) {
+  if (t.isIdentifier(value)) return value.name;
+  return t.isAssignmentPattern(value) && t.isIdentifier(value.left) ? value.left.name : null;
+}
+
+function collectObjectPatternSeeds(pattern, taintedPropNames) {
   const seeds = new Set();
-  if (!params || params.length === 0) return seeds;
-
-  const firstParam = params[0]; // firstParam is the props parameter in a function component, or null in a class component
-
-  if (t.isObjectPattern(firstParam)) { // isObjectPattern means destructured props: function Comp({ propA, propB: localB, propC = val })
-    for (const prop of firstParam.properties) { // for each property in the destructuring pattern
-      if (t.isRestElement(prop)) { // isRestElement means a rest element: function Comp({ ...rest })
-        if (t.isIdentifier(prop.argument)) seeds.add(prop.argument.name); // conservatively seed the rest identifier if any tainted prop is included in the rest
-        continue;
-      }
-      if (!t.isObjectProperty(prop)) continue; // we only care about normal properties, not rest elements
-
-      // The incoming prop name (key side)
-      const keyName = t.isIdentifier(prop.key) // if the key is an identifier (propA), use its name
-        ? prop.key.name
-        : t.isStringLiteral(prop.key)
-          ? prop.key.value
-          : null;
-      if (!keyName || !taintedPropNames.has(keyName)) continue;
-
-      // The local binding name (value side)
-      const localName = t.isIdentifier(prop.value) // if the value is an identifier (propB: localB or propC = val), use its name
-        ? prop.value.name
-        : t.isAssignmentPattern(prop.value) && t.isIdentifier(prop.value.left)
-          ? prop.value.left.name
-          : null;
-      if (localName) seeds.add(localName);
+  for (const property of pattern.properties) {
+    if (t.isRestElement(property)) {
+      if (t.isIdentifier(property.argument)) seeds.add(property.argument.name);
+      continue;
     }
-  } else if (t.isIdentifier(firstParam)) {
-    // props object - conservatively seed the whole props reference
-    seeds.add(firstParam.name);
+    if (!t.isObjectProperty(property)) continue;
+    const keyName = propertyKeyName(property);
+    if (!keyName || !taintedPropNames.has(keyName)) continue;
+    const localName = localPatternName(property.value);
+    if (localName) seeds.add(localName);
   }
+  return seeds;
+}
 
+function extractPropSeedIdentifiers(params, taintedPropNames) {
+  if (!params || params.length === 0) return new Set();
+  const firstParam = params[0];
+  if (t.isObjectPattern(firstParam)) return collectObjectPatternSeeds(firstParam, taintedPropNames);
+  const seeds = new Set();
+  if (t.isIdentifier(firstParam)) seeds.add(firstParam.name);
   return seeds;
 }
 
@@ -294,26 +293,6 @@ function extractPropSeedIdentifiers(params, taintedPropNames) {
  *
  * When a Component Graph (graph) is provided, also performs inter-component reachability: if tainted data is passed as a prop to a child component that contains a security sink, a HIGH inter-component finding is emitted.
  */
-const REASON_CODES = Object.freeze({
-  NO_BINDING: "NO_BINDING",
-  UNUSED_IMPORT: "UNUSED_IMPORT",
-  COMPONENT_WITHOUT_SINK: "COMPONENT_WITHOUT_SINK",
-  DIRECT_SINK_FLOW: "DIRECT_SINK_FLOW",
-  PROPAGATED_SINK_FLOW: "PROPAGATED_SINK_FLOW",
-  NO_PROVEN_SINK_PATH: "NO_PROVEN_SINK_PATH",
-  INTER_COMPONENT_SINK_FLOW: "INTER_COMPONENT_SINK_FLOW",
-});
-
-const REASONS = Object.freeze({
-  [REASON_CODES.NO_BINDING]: "Vulnerable dependency imported but no binding name captured (dynamic import or bare require)",
-  [REASON_CODES.UNUSED_IMPORT]: "Vulnerable dependency imported but identifiers are never referenced in any component",
-  [REASON_CODES.COMPONENT_WITHOUT_SINK]: "Vulnerable dependency used inside React component but no security sink found in this component",
-  [REASON_CODES.DIRECT_SINK_FLOW]: "Vulnerable dependency identifier flows directly into a security sink",
-  [REASON_CODES.PROPAGATED_SINK_FLOW]: "Variable derived from vulnerable dependency reaches a security sink via React hooks or local propagation",
-  [REASON_CODES.NO_PROVEN_SINK_PATH]: "Vulnerable dependency used in a component with sinks, but no structural data path found",
-  [REASON_CODES.INTER_COMPONENT_SINK_FLOW]: "Tainted data from vulnerable dependency flows through component props boundary into a security sink in a child component",
-});
-
 function groupByFile(items) {
   const index = new Map();
   for (const item of items) {
@@ -334,15 +313,21 @@ function createAnalysisIndexes(components, sinks) {
   return { componentsByFile, sinksByFile, sinksByComponent };
 }
 
-function createFinding(usage, reasonCode, values) {
+function createFinding(usage, classification, values) {
   return {
     packageName: usage.packageName,
     filePath: usage.filePath,
     auditSeverity: usage.auditSeverity ?? "unknown",
-    reasonCode,
-    reason: REASONS[reasonCode],
+    reasonCode: classification.reasonCode,
+    reason: REASONS[classification.reasonCode],
+    reachability: classification.reachability,
     ...values,
   };
+}
+
+function classifyFinding(chain, usage, context, values) {
+  const classification = chain.handle(context);
+  return classification ? createFinding(usage, classification, values) : null;
 }
 
 function findRelevantComponents(usage, componentsByFile) {
@@ -351,50 +336,115 @@ function findRelevantComponents(usage, componentsByFile) {
   );
 }
 
-function analyzeIntraComponent(usage, component, vulnIds, componentSinks, options) {
+function analyzeIntraComponent(usage, component, vulnIds, componentSinks, options, chain) {
   const findings = [];
   const taint = computeTaintedBindings(component, vulnIds, options);
-  if (componentSinks.length === 0) {
-    findings.push(createFinding(usage, REASON_CODES.COMPONENT_WITHOUT_SINK, {
-      reachability: "MEDIUM",
-      component: component.name,
-      sinkType: null,
-      sinkLoc: null,
-      taintedPath: [...usage.importedAs],
-    }));
+  const componentFinding = classifyFinding(chain, usage, {
+    stage: "component",
+    componentSinks,
+  }, {
+    component: component.name,
+    sinkType: null,
+    sinkLoc: null,
+    taintedPath: [...usage.importedAs],
+  });
+  if (componentFinding) {
+    findings.push(componentFinding);
     return { findings, taint };
   }
 
   let hasSinkPath = false;
   for (const sink of componentSinks) {
     const overlap = sinkOverlap(sink, taint);
-    if (overlap.names.length === 0) continue;
-    hasSinkPath = true;
     const direct = overlap.bindings.some((binding) => taint.sourceBindings.has(binding)) ||
       (overlap.bindings.length === 0 && overlap.names.some((identifier) => vulnIds.has(identifier)));
-    const reasonCode = direct ? REASON_CODES.DIRECT_SINK_FLOW : REASON_CODES.PROPAGATED_SINK_FLOW;
-    findings.push(createFinding(usage, reasonCode, {
-      reachability: direct ? "CRITICAL" : "HIGH",
+    const finding = classifyFinding(chain, usage, {
+      stage: "sink",
+      hasTaintOverlap: overlap.names.length > 0,
+      direct,
+    }, {
       component: component.name,
       sinkType: sink.sinkType,
       sinkLoc: sink.loc,
       ...sinkMetadata(sink),
       taintedPath: overlap.names,
-    }));
+    });
+    if (!finding) continue;
+    hasSinkPath = true;
+    findings.push(finding);
   }
-  if (!hasSinkPath) {
-    findings.push(createFinding(usage, REASON_CODES.NO_PROVEN_SINK_PATH, {
-      reachability: "MEDIUM",
-      component: component.name,
-      sinkType: null,
-      sinkLoc: null,
-      taintedPath: [...usage.importedAs],
-    }));
-  }
+  const fallbackFinding = classifyFinding(chain, usage, {
+    stage: "component-fallback",
+    hasSinkPath,
+  }, {
+    component: component.name,
+    sinkType: null,
+    sinkLoc: null,
+    taintedPath: [...usage.importedAs],
+  });
+  if (fallbackFinding) findings.push(fallbackFinding);
   return { findings, taint };
 }
 
-function analyzeInterComponent(usage, component, initialTaint, graph, sinksByComponent, options) {
+function resolveRenderedEdges(graph, component, renderedName) {
+  if (graph.resolveRenderedChild) return graph.resolveRenderedChild(component, renderedName);
+  return graph.getNodeByName(renderedName).map((node) => ({
+    node,
+    resolution: "global-fallback",
+    confidence: 60,
+  }));
+}
+
+function createChildTraversalState(rootComponent, state, edge, propNames, visited, options) {
+  const childComponent = edge.node.component;
+  if (childComponent === rootComponent) return null;
+  const propSeedIds = extractPropSeedIdentifiers(childComponent.params, propNames);
+  if (propSeedIds.size === 0) return null;
+  const visitKey = `${edge.node.key}|${[...propSeedIds].sort().join(",")}`;
+  if (visited.has(visitKey)) return null;
+  visited.add(visitKey);
+  const propagationStep = {
+    from: state.current.name,
+    to: childComponent.name,
+    props: [...propNames],
+    resolution: edge.resolution,
+  };
+  return {
+    current: childComponent,
+    taint: computeTaintedBindings(childComponent, propSeedIds, options),
+    componentPath: [...state.componentPath, childComponent.name],
+    propagationPath: [...state.propagationPath, propagationStep],
+    taintedProps: [...state.taintedProps, ...propNames],
+    resolutionConfidence: Math.min(state.resolutionConfidence, edge.confidence ?? 60),
+  };
+}
+
+function classifyChildComponentSinks(usage, rootComponent, state, sinksByComponent, chain) {
+  const findings = [];
+  for (const sink of sinksByComponent.get(state.current) || []) {
+    const overlap = sinkOverlap(sink, state.taint);
+    const finding = classifyFinding(chain, usage, {
+      stage: "inter-component",
+      hasTaintOverlap: overlap.names.length > 0,
+    }, {
+      component: rootComponent.name,
+      childComponent: state.current.name,
+      componentPath: state.componentPath,
+      propagationPath: state.propagationPath,
+      sinkType: sink.sinkType,
+      sinkLoc: sink.loc,
+      ...sinkMetadata(sink),
+      componentResolutionConfidence: state.resolutionConfidence,
+      sinkFilePath: state.current.filePath,
+      taintedPath: [...state.taintedProps, ...overlap.names],
+      propagationType: "inter-component",
+    });
+    if (finding) findings.push(finding);
+  }
+  return findings;
+}
+
+function analyzeInterComponent(usage, component, initialTaint, graph, sinksByComponent, options, chain) {
   if (!graph) return [];
   const findings = [];
   const queue = [{
@@ -410,71 +460,32 @@ function analyzeInterComponent(usage, component, initialTaint, graph, sinksByCom
     const state = queue.shift();
     const outgoingProps = collectTaintedJSXProps(state.current, state.taint);
     for (const [renderedName, propNames] of outgoingProps) {
-      const edges = graph.resolveRenderedChild
-        ? graph.resolveRenderedChild(state.current, renderedName)
-        : graph.getNodeByName(renderedName).map((node) => ({ node, resolution: "global-fallback", confidence: 60 }));
+      const edges = resolveRenderedEdges(graph, state.current, renderedName);
       for (const edge of edges) {
-        const childComponent = edge.node.component;
-        if (childComponent === component) continue;
-        const propSeedIds = extractPropSeedIdentifiers(childComponent.params, propNames);
-        if (propSeedIds.size === 0) continue;
-        const visitKey = `${edge.node.key}|${[...propSeedIds].sort().join(",")}`;
-        if (visited.has(visitKey)) continue;
-        visited.add(visitKey);
-        const childTaint = computeTaintedBindings(childComponent, propSeedIds, options);
-        const componentPath = [...state.componentPath, childComponent.name];
-        const propagationStep = {
-          from: state.current.name,
-          to: childComponent.name,
-          props: [...propNames],
-          resolution: edge.resolution,
-        };
-        const propagationPath = [...state.propagationPath, propagationStep];
-        const taintedProps = [...state.taintedProps, ...propNames];
-        const resolutionConfidence = Math.min(state.resolutionConfidence, edge.confidence ?? 60);
-        for (const sink of sinksByComponent.get(childComponent) || []) {
-          const overlap = sinkOverlap(sink, childTaint);
-          if (overlap.names.length === 0) continue;
-          findings.push(createFinding(usage, REASON_CODES.INTER_COMPONENT_SINK_FLOW, {
-            reachability: "HIGH",
-            component: component.name,
-            childComponent: childComponent.name,
-            componentPath,
-            propagationPath,
-            sinkType: sink.sinkType,
-            sinkLoc: sink.loc,
-            ...sinkMetadata(sink),
-            componentResolutionConfidence: resolutionConfidence,
-            sinkFilePath: childComponent.filePath,
-            taintedPath: [...taintedProps, ...overlap.names],
-            propagationType: "inter-component",
-          }));
-        }
-        queue.push({ current: childComponent, taint: childTaint, componentPath, propagationPath, taintedProps, resolutionConfidence });
+        const childState = createChildTraversalState(component, state, edge, propNames, visited, options);
+        if (!childState) continue;
+        findings.push(...classifyChildComponentSinks(usage, component, childState, sinksByComponent, chain));
+        queue.push(childState);
       }
     }
   }
   return findings;
 }
 
-function analyzeUsage(usage, indexes, graph, options) {
+function analyzeUsage(usage, indexes, graph, options, chain) {
   const vulnIds = new Set(usage.importedAs);
-  if (vulnIds.size === 0) {
-    return [createFinding(usage, REASON_CODES.NO_BINDING, {
-      reachability: "LOW", component: null, sinkType: null, sinkLoc: null, taintedPath: [],
-    })];
-  }
   const relevantComponents = findRelevantComponents(usage, indexes.componentsByFile);
-  if (relevantComponents.length === 0) {
-    return [createFinding(usage, REASON_CODES.UNUSED_IMPORT, {
-      reachability: "NONE", component: null, sinkType: null, sinkLoc: null, taintedPath: [],
-    })];
-  }
+  const usageFinding = classifyFinding(chain, usage, {
+    stage: "usage",
+    vulnerableIdentifiers: vulnIds,
+    relevantComponents,
+  }, { component: null, sinkType: null, sinkLoc: null, taintedPath: [] });
+  if (usageFinding) return [usageFinding];
   const findings = [];
   for (const component of relevantComponents) {
-    const intra = analyzeIntraComponent(usage, component, vulnIds, indexes.sinksByComponent.get(component) || [], options);
+    const intra = analyzeIntraComponent(usage, component, vulnIds, indexes.sinksByComponent.get(component) || [], options, chain);
     findings.push(...intra.findings);
-    findings.push(...analyzeInterComponent(usage, component, intra.taint, graph, indexes.sinksByComponent, options));
+    findings.push(...analyzeInterComponent(usage, component, intra.taint, graph, indexes.sinksByComponent, options, chain));
   }
   return findings;
 }
@@ -483,7 +494,8 @@ function computeReachability(dependencyUsages, components, sinks, graph = null, 
   const indexes = createAnalysisIndexes(components, sinks);
   const diagnostics = [];
   const options = { maxIterations: config.maxTaintIterations ?? 100, diagnostics };
-  const findings = dependencyUsages.flatMap((usage) => analyzeUsage(usage, indexes, graph, options));
+  const chain = createReachabilityChain();
+  const findings = dependencyUsages.flatMap((usage) => analyzeUsage(usage, indexes, graph, options, chain));
   Object.defineProperty(findings, "diagnostics", { value: diagnostics, enumerable: false });
   return findings;
 }
