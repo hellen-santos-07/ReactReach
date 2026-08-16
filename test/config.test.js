@@ -52,7 +52,7 @@ test("configuration validates the taint iteration limit", () => {
 });
 
 test("configuration exposes project-local sink modules before validating custom rule ids", () => {
-  const project = path.join(__dirname, "..", "fixtures", "plugin-project");
+  const project = path.join(__dirname, "fixtures", "plugin-project");
   const loaded = loadConfig(project);
   assert.deepEqual(loaded.config.sinkModules, ["./rules/customAlert.js"]);
   assert.equal(loaded.config.sinkModuleBase, project);
@@ -70,4 +70,11 @@ test("configuration rejects invalid sink module settings", () => {
   assert.throws(() => validateConfig({ ...DEFAULT_CONFIG, sinkModules: 42 }, ids), /sinkModules/);
   assert.throws(() => validateConfig({ ...DEFAULT_CONFIG, includeDefaultSinks: "yes" }, ids), /includeDefaultSinks/);
   assert.throws(() => validateConfig({ ...DEFAULT_CONFIG, sinkModules: [path.resolve("rule.js")] }, ids), /relative local paths/);
+});
+
+test("configuration reports malformed sink selections without leaking a TypeError", () => {
+  assert.throws(
+    () => validateConfig({ ...DEFAULT_CONFIG, sinks: 42, excludeSinks: 42 }, ids),
+    (error) => error.code === "INVALID_CONFIG" && /sinks must be an array/.test(error.message),
+  );
 });

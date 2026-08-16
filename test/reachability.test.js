@@ -30,6 +30,20 @@ test("local propagation into a sink is HIGH", () => {
   assert.deepEqual(findings[0].taintedPath, ["result"]);
 });
 
+test("classification chain preserves multiple findings for one dependency usage", () => {
+  const findings = analyze(`
+    import vulnerable from "vulnerable-package";
+    function App() {
+      eval(vulnerable);
+      const generated = new Function(vulnerable);
+      return <div>{generated.name}</div>;
+    }
+  `);
+  assert.equal(findings.length, 2);
+  assert.deepEqual(findings.map((finding) => finding.sinkRuleId), ["eval", "new-function"]);
+  assert.ok(findings.every((finding) => finding.reachability === "CRITICAL"));
+});
+
 test("unused import produces NONE", () => {
   const findings = analyze(`import vulnerable from "vulnerable-package"; function App() { return <div>safe</div>; }`);
   assert.equal(findings[0].reachability, "NONE");

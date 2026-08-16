@@ -53,6 +53,15 @@ test("summary table can sort reached sinks by configured priority", () => {
   assert.ok(text.indexOf("higher") < text.indexOf("lower"));
 });
 
+test("summary table reports an empty result set without rendering a table", () => {
+  const output = [];
+  const originalLog = console.log;
+  console.log = (line = "") => output.push(line);
+  try { printSummaryTable([], "/project/"); }
+  finally { console.log = originalLog; }
+  assert.deepEqual(output, ["\nNo reachability findings."]);
+});
+
 test("SARIF preserves multi-component propagation evidence and diagnostics", () => {
   const finding = {
     packageName: "unsafe",
@@ -76,9 +85,11 @@ test("SARIF preserves multi-component propagation evidence and diagnostics", () 
   };
   const report = buildReport("/project", new Map(), [], [], { size: 0, edgeCount: 0 }, [], [finding], {
     diagnostics: [{ code: "EXAMPLE" }],
+    timings: { totalMs: 12.5 },
   });
   const sarif = formatSarifReport(report);
   assert.deepEqual(sarif.runs[0].results[0].properties.componentPath, finding.componentPath);
   assert.deepEqual(sarif.runs[0].results[0].properties.propagationPath, finding.propagationPath);
   assert.deepEqual(sarif.runs[0].properties.diagnostics, [{ code: "EXAMPLE" }]);
+  assert.deepEqual(sarif.runs[0].properties.timings, { totalMs: 12.5 });
 });

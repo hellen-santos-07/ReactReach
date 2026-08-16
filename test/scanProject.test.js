@@ -22,12 +22,21 @@ test("scanProject orchestrates injected stages and produces a deterministic repo
     reachabilityAnalyzer: async () => findings,
     logger: (event) => calls.push(event.stage),
     clock: () => new Date("2026-01-02T03:04:05.000Z"),
+    now: (() => {
+      let value = 0;
+      return () => value++ * 5;
+    })(),
   };
   const result = await scanProject(fixture, {}, dependencies);
   assert.equal(result.report.scannedAt, "2026-01-02T03:04:05.000Z");
   assert.equal(result.report.summary.findings, 1);
   assert.deepEqual(result.diagnostics, []);
   assert.deepEqual(result.report.diagnostics, []);
+  assert.equal(result.timings.auditMs, 5);
+  assert.equal(result.timings.staticAnalysisMs, 30);
+  assert.equal(result.timings.reportMs, 5);
+  assert.equal(result.timings.totalMs, 85);
+  assert.strictEqual(result.report.timings, result.timings);
   assert.deepEqual(calls, ["audit", "parse", "dependencies", "components", "sinks", "graph", "reachability"]);
 });
 

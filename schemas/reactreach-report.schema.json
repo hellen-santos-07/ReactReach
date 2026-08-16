@@ -1,0 +1,98 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://reactreach.local/schemas/report-v1.json",
+  "title": "ReactReach report",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "projectPath",
+    "scannedAt",
+    "configuration",
+    "diagnostics",
+    "timings",
+    "summary",
+    "packages",
+    "analyzedFiles",
+    "findings"
+  ],
+  "properties": {
+    "projectPath": { "type": "string", "minLength": 1 },
+    "scannedAt": { "type": "string", "format": "date-time" },
+    "configuration": { "type": "object" },
+    "diagnostics": { "type": "array", "items": { "type": "object" } },
+    "timings": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "auditMs": { "type": "number", "minimum": 0 },
+        "parseMs": { "type": "number", "minimum": 0 },
+        "dependenciesMs": { "type": "number", "minimum": 0 },
+        "componentsMs": { "type": "number", "minimum": 0 },
+        "sinksMs": { "type": "number", "minimum": 0 },
+        "graphMs": { "type": "number", "minimum": 0 },
+        "reachabilityMs": { "type": "number", "minimum": 0 },
+        "staticAnalysisMs": { "type": "number", "minimum": 0 },
+        "reportMs": { "type": "number", "minimum": 0 },
+        "totalMs": { "type": "number", "minimum": 0 }
+      }
+    },
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["vulnerablePackages", "sourceFiles", "components", "cogNodes", "cogEdges", "sinks", "findings"],
+      "properties": {
+        "vulnerablePackages": { "type": "integer", "minimum": 0 },
+        "sourceFiles": { "type": "integer", "minimum": 0 },
+        "components": { "type": "integer", "minimum": 0 },
+        "cogNodes": { "type": "integer", "minimum": 0 },
+        "cogEdges": { "type": "integer", "minimum": 0 },
+        "sinks": { "type": "integer", "minimum": 0 },
+        "findings": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "packages": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "severity"],
+        "properties": {
+          "name": { "type": "string", "minLength": 1 },
+          "severity": { "type": "string", "minLength": 1 },
+          "isDirect": { "type": "boolean" },
+          "via": { "type": "array" },
+          "effects": { "type": "array" },
+          "range": { "type": ["string", "null"] },
+          "nodes": { "type": "array" },
+          "fixAvailable": {}
+        }
+      }
+    },
+    "analyzedFiles": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["packageName", "filePath", "auditSeverity", "reasonCode", "reason", "reachability"],
+        "properties": {
+          "packageName": { "type": "string", "minLength": 1 },
+          "filePath": { "type": "string", "minLength": 1 },
+          "auditSeverity": { "type": "string", "minLength": 1 },
+          "reasonCode": { "type": "string", "minLength": 1 },
+          "reason": { "type": "string", "minLength": 1 },
+          "reachability": { "enum": ["CRITICAL", "HIGH", "MEDIUM", "LOW", "NONE"] },
+          "component": { "type": ["string", "null"] },
+          "childComponent": { "type": ["string", "null"] },
+          "sinkType": { "type": ["string", "null"] },
+          "sinkRuleId": { "type": ["string", "null"] },
+          "sinkCategory": { "type": ["string", "null"] },
+          "sinkPriority": { "type": ["number", "null"] },
+          "confidence": { "type": ["number", "null"] },
+          "taintedPath": { "type": "array", "items": { "type": "string" } },
+          "componentPath": { "type": ["array", "null"], "items": { "type": "string" } },
+          "propagationPath": { "type": ["array", "null"], "items": { "type": "object" } },
+          "componentResolutionConfidence": { "type": ["number", "null"] }
+        }
+      }
+    }
+  }
+}

@@ -86,8 +86,24 @@ test("registry rejects malformed custom rules", () => {
   assert.throws(() => validateRule({ id: "invalid" }), /missing/);
 });
 
+test("registry rejects unsupported Babel node types before analysis", () => {
+  assert.throws(
+    () => validateRule({
+      id: "invalid-node",
+      name: "Invalid node",
+      category: "test",
+      defaultPriority: 50,
+      confidence: 50,
+      nodeType: "NotABabelNode",
+      match: () => true,
+      getValueNode: () => null,
+    }),
+    (error) => error.code === "INVALID_CONFIG" && /unsupported Babel nodeType/.test(error.message),
+  );
+});
+
 test("project configuration loads a custom strategy without changing the plugin host", () => {
-  const pluginProject = path.join(__dirname, "..", "fixtures", "plugin-project");
+  const pluginProject = path.join(__dirname, "fixtures", "plugin-project");
   const sinkRules = loadSinkRules({
     modules: ["./rules/customAlert.js"],
     basePath: pluginProject,
@@ -106,7 +122,7 @@ test("project configuration loads a custom strategy without changing the plugin 
 });
 
 test("plugin loading rejects missing modules as configuration errors", () => {
-  const pluginProject = path.join(__dirname, "..", "fixtures", "invalid-plugin-project");
+  const pluginProject = path.join(__dirname, "fixtures", "invalid-plugin-project");
   assert.throws(
     () => loadSinkRules({ modules: ["./rules/missing.js"], basePath: pluginProject }),
     (error) => error.code === "INVALID_CONFIG" && /Unable to resolve sink module/.test(error.message),
@@ -114,7 +130,7 @@ test("plugin loading rejects missing modules as configuration errors", () => {
 });
 
 test("plugin modules cannot escape the configuration directory", () => {
-  const pluginProject = path.join(__dirname, "..", "fixtures", "plugin-project");
+  const pluginProject = path.join(__dirname, "fixtures", "plugin-project");
   assert.throws(
     () => loadSinkRules({ modules: ["../outside.js"], basePath: pluginProject }),
     (error) => error.code === "INVALID_CONFIG" && /escapes the configuration directory/.test(error.message),
@@ -122,7 +138,7 @@ test("plugin modules cannot escape the configuration directory", () => {
 });
 
 test("project configuration can replace all built-in sink strategies", () => {
-  const pluginProject = path.join(__dirname, "..", "fixtures", "plugin-project");
+  const pluginProject = path.join(__dirname, "fixtures", "plugin-project");
   const sinkRules = loadSinkRules({
     modules: ["./rules/customAlert.js"],
     basePath: pluginProject,
