@@ -1,0 +1,3 @@
+{
+  "sinkModules": ["./rules/missing.js"]
+}
