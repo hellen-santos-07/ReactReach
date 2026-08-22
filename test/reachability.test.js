@@ -1,5 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const path = require("node:path");
 const extractComponents = require("../src/component/extractComponents");
 const extractSinks = require("../src/sinks/extractSinks");
 const computeReachability = require("../src/reachability/computeReachability");
@@ -156,13 +157,14 @@ test("taint propagates through multiple component boundaries", () => {
 });
 
 test("relative imports disambiguate components with identical names", () => {
+  const projectRoot = path.resolve("project");
   const parent = parseSnippet(`
     import vulnerable from "vulnerable-package";
     import SafeTarget from "./safe/Target";
     function Parent() { const value = vulnerable(); return <SafeTarget content={value} />; }
-  `, "C:/project/src/Parent.jsx");
-  const safe = parseSnippet(`export default function Target({ content }) { return <div>{content}</div>; }`, "C:/project/src/safe/Target.jsx");
-  const dangerous = parseSnippet(`export default function Target({ content }) { return <div dangerouslySetInnerHTML={{__html: content}} />; }`, "C:/project/src/danger/Target.jsx");
+  `, path.join(projectRoot, "src", "Parent.jsx"));
+  const safe = parseSnippet(`export default function Target({ content }) { return <div>{content}</div>; }`, path.join(projectRoot, "src", "safe", "Target.jsx"));
+  const dangerous = parseSnippet(`export default function Target({ content }) { return <div dangerouslySetInnerHTML={{__html: content}} />; }`, path.join(projectRoot, "src", "danger", "Target.jsx"));
   const files = [parent, safe, dangerous];
   const components = extractComponents(files);
   const graph = buildComponentGraph(components);

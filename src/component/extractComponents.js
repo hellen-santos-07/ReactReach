@@ -1,6 +1,43 @@
 const ASTWalker = require("../ast/ASTWalker");
 const t = require("@babel/types");
 
+const REACT_CLASS_BASES = new Set(["Component", "PureComponent"]);
+
+function importedName(specifier) {
+  if (t.isImportDefaultSpecifier(specifier)) return "default";
+  if (t.isImportNamespaceSpecifier(specifier)) return "*";
+  return specifier.imported.name ?? specifier.imported.value;
+}
+
+function rememberBinding(bindings, localIdentifier) {
+  bindings.set(localIdentifier.name, localIdentifier);
+}
+
+function matchesRememberedBinding(path, name, bindings) {
+  const rememberedIdentifier = bindings.get(name);
+  if (!rememberedIdentifier) return false;
+  const binding = path.scope.getBinding(name);
+  return binding?.identifier === rememberedIdentifier;
+}
+
+function memberName(node) {
+  if (!t.isMemberExpression(node)) return null;
+  if (!node.computed && t.isIdentifier(node.property)) return node.property.name;
+  if (node.computed && t.isStringLiteral(node.property)) return node.property.value;
+  return null;
+}
+
+function isReactClassComponent(path, reactBindings) {
+  const superClass = path.node.superClass;
+  if (t.isIdentifier(superClass)) {
+    return matchesRememberedBinding(path, superClass.name, reactBindings.classBases);
+  }
+
+  if (!t.isMemberExpression(superClass) || !t.isIdentifier(superClass.object)) return false;
+  return REACT_CLASS_BASES.has(memberName(superClass)) &&
+    matchesRememberedBinding(path, superClass.object.name, reactBindings.namespaces);
+}
+
 function isJSXReturningFunction(node) {
   if (!node || !node.body) return false;
 
@@ -20,18 +57,22 @@ function isJSXReturningFunction(node) {
   return false;
 }
 
-function createImportVisitors(fileImports, componentImports) {
+function createImportVisitors(fileImports, componentImports, reactBindings) {
   return {
     ImportDeclaration(path) {
       const source = path.node.source.value;
       for (const specifier of path.node.specifiers) {
         fileImports.set(specifier.local.name, source);
-        const importedName = t.isImportDefaultSpecifier(specifier)
-          ? "default"
-          : t.isImportNamespaceSpecifier(specifier)
-            ? "*"
-            : specifier.imported.name ?? specifier.imported.value;
-        componentImports.set(specifier.local.name, { source, importedName, kind: "import" });
+        const imported = importedName(specifier);
+        componentImports.set(specifier.local.name, { source, importedName: imported, kind: "import" });
+
+        if (source === "react") {
+          if (imported === "default" || imported === "*") {
+            rememberBinding(reactBindings.namespaces, specifier.local);
+          } else if (REACT_CLASS_BASES.has(imported)) {
+            rememberBinding(reactBindings.classBases, specifier.local);
+          }
+        }
       }
     },
     VariableDeclarator(path) {
@@ -48,10 +89,17 @@ function createImportVisitors(fileImports, componentImports) {
         const id = path.node.id;
         if (id.type === "Identifier") {
           fileImports.set(id.name, source);
+          if (source === "react") rememberBinding(reactBindings.namespaces, id);
         } else if (id.type === "ObjectPattern") {
           for (const prop of id.properties) {
             if (prop.value && prop.value.type === "Identifier") {
               fileImports.set(prop.value.name, source);
+              const imported = t.isIdentifier(prop.key) || t.isStringLiteral(prop.key)
+                ? prop.key.name ?? prop.key.value
+                : null;
+              if (source === "react" && REACT_CLASS_BASES.has(imported)) {
+                rememberBinding(reactBindings.classBases, prop.value);
+              }
             }
           }
         }
@@ -111,15 +159,23 @@ function collectRenderedComponents(bodyNode) {
 
 class ComponentWalker extends ASTWalker {
   createFileContext() {
-    return { fileImports: new Map(), componentImports: new Map() };
+    return {
+      fileImports: new Map(),
+      componentImports: new Map(),
+      reactBindings: { namespaces: new Map(), classBases: new Map() },
+    };
   }
 
   createPreVisitors(_file, fileContext) {
-    return createImportVisitors(fileContext.fileImports, fileContext.componentImports);
+    return createImportVisitors(
+      fileContext.fileImports,
+      fileContext.componentImports,
+      fileContext.reactBindings
+    );
   }
 
   createVisitors(file, fileContext, _context, components) {
-    const { fileImports, componentImports } = fileContext;
+    const { fileImports, componentImports, reactBindings } = fileContext;
     return {
       FunctionDeclaration(path) {
         const name = path.node.id?.name;
@@ -183,16 +239,11 @@ class ComponentWalker extends ASTWalker {
 
       ClassDeclaration(path) {
         const name = path.node.id?.name;
-        const superClass = path.node.superClass;
 
         if (
           name &&
           /^[A-Z]/.test(name) &&
-          superClass && // class components : check if it extends React.Component or Component
-          (
-            superClass.type === "MemberExpression" ||
-            superClass.type === "Identifier"
-          )
+          isReactClassComponent(path, reactBindings)
         ) {
           const body = path.node.body;
           const bodyPath = path.get("body");
@@ -229,3 +280,4 @@ module.exports.ComponentWalker = ComponentWalker;
 module.exports.isJSXReturningFunction = isJSXReturningFunction;
 module.exports.collectReferencedImports = collectReferencedImports;
 module.exports.collectRenderedComponents = collectRenderedComponents;
+module.exports.isReactClassComponent = isReactClassComponent;

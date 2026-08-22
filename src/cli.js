@@ -2,6 +2,7 @@
 
 const { Command } = require("commander");
 const path = require("path");
+const { version: REACTREACH_VERSION } = require("../package.json");
 const { scanProject } = require("./scanProject");
 const { loadConfig, validateConfig } = require("./config");
 const { listSinkRules, loadSinkRules } = require("./sinks/registry");
@@ -44,7 +45,7 @@ function resolveOutput(projectPath, filePath) {
 function createProgram(dependencies = {}) {
   const scanner = dependencies.scanProject || scanProject;
   const program = new Command();
-  program.name("reactreach").description("React dependency vulnerability reachability analyser").version("0.1.0");
+  program.name("reactreach").description("React dependency vulnerability reachability analyser").version(REACTREACH_VERSION);
 
   program.command("list-sinks")
     .description("List available security sink rules")

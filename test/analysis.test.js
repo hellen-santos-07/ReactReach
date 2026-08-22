@@ -34,3 +34,36 @@ test("component extraction characterizes function, arrow, and class components",
   assert.deepEqual(components[0].renderedComponents, ["Widget"]);
   assert.equal(components[2].type, "ClassComponent");
 });
+
+test("class component extraction accepts React bases and rejects unrelated inheritance", () => {
+  const file = parseSnippet(`
+    import ReactAlias, { Component as ImportedComponent, PureComponent } from "react";
+    import Other from "other-library";
+    import { Component as ForeignComponent } from "other-react-like-library";
+    const ReactCjs = require("react");
+    const { Component: RequiredComponent } = require("react");
+
+    class DefaultComponent extends ReactAlias.Component {}
+    class DefaultPureComponent extends ReactAlias.PureComponent {}
+    class NamedComponent extends ImportedComponent {}
+    class NamedPureComponent extends PureComponent {}
+    class RequiredNamespaceComponent extends ReactCjs.Component {}
+    class RequiredNamedComponent extends RequiredComponent {}
+
+    class Utility extends Error {}
+    class DomainModel extends BaseModel {}
+    class ForeignNamespaceComponent extends Other.Component {}
+    class ForeignNamedComponent extends ForeignComponent {}
+  `, "class-components.jsx");
+
+  const components = extractComponents([file]);
+  assert.deepEqual(components.map((component) => component.name), [
+    "DefaultComponent",
+    "DefaultPureComponent",
+    "NamedComponent",
+    "NamedPureComponent",
+    "RequiredNamespaceComponent",
+    "RequiredNamedComponent",
+  ]);
+  assert.ok(components.every((component) => component.type === "ClassComponent"));
+});

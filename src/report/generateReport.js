@@ -1,5 +1,6 @@
 const fs = require("fs");
 const path = require("path");
+const { version: REACTREACH_VERSION } = require("../../package.json");
 
 // Severity ordering for sort and colour
 const SEVERITY_ORDER = { CRITICAL: 0, HIGH: 1, MEDIUM: 2, LOW: 3, NONE: 4 };
@@ -413,8 +414,8 @@ function formatSarifReport(report) {
         tool: {
           driver: {
             name: "ReactReach",
-            version: "0.1.0",
-            informationUri: "https://github.com/hellensantos/reactreach",
+            version: REACTREACH_VERSION,
+            informationUri: "https://github.com/hellen-santos-07/ReactReach",
             rules: SARIF_RULES,
           },
         },

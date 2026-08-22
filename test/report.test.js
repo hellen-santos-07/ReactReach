@@ -1,5 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const { version: packageVersion } = require("../package.json");
 const { buildReport, formatSarifReport, printSummaryTable } = require("../src/report/generateReport");
 
 test("buildReport accepts an injected scan timestamp and preserves its schema", () => {
@@ -33,6 +34,8 @@ test("SARIF formatting characterizes rule and source location output", () => {
   const sarif = formatSarifReport(report);
   const result = sarif.runs[0].results[0];
   assert.equal(sarif.version, "2.1.0");
+  assert.equal(sarif.runs[0].tool.driver.version, packageVersion);
+  assert.equal(sarif.runs[0].tool.driver.informationUri, "https://github.com/hellen-santos-07/ReactReach");
   assert.equal(result.level, "error");
   assert.equal(result.locations[0].physicalLocation.region.startLine, 4);
   assert.equal(result.locations[0].physicalLocation.artifactLocation.uri, "src/App.jsx");

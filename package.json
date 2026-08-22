@@ -1,8 +1,32 @@
 {
   "name": "reactreach",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "React dependency vulnerability reachability analyser",
+  "keywords": [
+    "react",
+    "static-analysis",
+    "software-composition-analysis",
+    "vulnerability-reachability",
+    "sarif"
+  ],
+  "homepage": "https://github.com/hellen-santos-07/ReactReach#readme",
+  "bugs": {
+    "url": "https://github.com/hellen-santos-07/ReactReach/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hellen-santos-07/ReactReach.git"
+  },
+  "license": "UNLICENSED",
+  "author": "Hellen Santos",
+  "engines": {
+    "node": ">=24"
+  },
   "main": "src/cli.js",
+  "files": [
+    "src",
+    "schemas"
+  ],
   "bin": {
     "reactreach": "./src/cli.js"
   },
