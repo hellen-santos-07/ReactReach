@@ -233,6 +233,6 @@ Instituto Politécnico do Porto (ISEP)
 - Email: 1190007@isep.ipp.pt  
 - GitHub: https://github.com/hellen-santos-07
 
-# Licence
+# License
 
 This project is intended for academic research purposes.

@@ -1,6 +1,6 @@
 {
   "name": "reactreach",
-  "version": "0.1.1",
+  "version": "1.0.0",
   "description": "React dependency vulnerability reachability analyser",
   "keywords": [
     "react",
