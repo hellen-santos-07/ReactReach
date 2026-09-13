@@ -17,12 +17,20 @@
     "type": "git",
     "url": "git+https://github.com/hellen-santos-07/ReactReach.git"
   },
-  "license": "UNLICENSED",
+  "license": "MIT",
   "author": "Hellen Santos",
   "engines": {
     "node": ">=24"
   },
-  "main": "src/cli.js",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./package.json": "./package.json",
+    "./src/config": "./src/config.js",
+    "./src/dependency/runAudit": "./src/dependency/runAudit.js",
+    "./src/report/generateReport": "./src/report/generateReport.js",
+    "./src/sinks/registry": "./src/sinks/registry.js"
+  },
   "files": [
     "src",
     "schemas"

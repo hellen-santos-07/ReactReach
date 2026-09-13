@@ -100,6 +100,20 @@ Use `--json` when stdout must contain only the findings JSON array. Progress and
 
 The CLI uses exit code `0` for success, `1` for project/audit/parse/execution failures, and `2` for invalid configuration or sink plugins.
 
+## Programmatic API
+
+The scan facade is also available from the package root:
+
+```js
+const { scanProject } = require("reactreach");
+
+const result = await scanProject("./app");
+```
+
+`scanProject()` resolves with the complete stage evidence, timings, findings,
+diagnostics, and report. It rejects project, audit, parsing, configuration, or
+analysis failures instead of terminating the host process.
+
 ## Sink selection and prioritisation
 
 List the available sink rules and their default metadata:
@@ -233,6 +247,6 @@ Instituto Politécnico do Porto (ISEP)
 - Email: 1190007@isep.ipp.pt  
 - GitHub: https://github.com/hellen-santos-07
 
-# License
+## License
 
-This project is intended for academic research purposes.
+This project is licensed under the MIT License — see the LICENSE file. This licence applies to all versions of this repository, including releases and commits made before the LICENSE file was added.
