@@ -43,6 +43,14 @@ async function measureStage(name, timings, now, operation) {
   }
 }
 
+/**
+ * Analyse a React project and return its structural-reachability evidence.
+ *
+ * @param {string} projectPath - Path to the project that will be analysed.
+ * @param {object} [config={}] - Effective ReactReach configuration.
+ * @param {object} [dependencies={}] - Optional injected stage implementations for testing.
+ * @returns {Promise<object>} The stage evidence, timings, findings, diagnostics, and report.
+ */
 async function scanProject(projectPath, config = {}, dependencies = {}) {
   const deps = { ...defaultDependencies, ...dependencies };
   const absolutePath = path.resolve(projectPath);

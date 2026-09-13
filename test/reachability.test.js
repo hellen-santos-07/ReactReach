@@ -175,3 +175,65 @@ test("relative imports disambiguate components with identical names", () => {
   assert.equal(parentNode.children.length, 1);
   assert.equal(parentNode.children[0].component.filePath, safe.filePath);
 });
+
+test("custom-hook return flow remains outside the supported model", () => {
+  const findings = analyze(`
+    import vulnerable from "vulnerable-package";
+    function useRendered(input) { return vulnerable(input); }
+    function App({ input }) {
+      const html = useRendered(input);
+      return <div dangerouslySetInnerHTML={{__html: html}} />;
+    }
+  `);
+
+  assert.equal(findings[0].reachability, "NONE");
+  assert.equal(findings[0].reasonCode, "UNUSED_IMPORT");
+});
+
+test("React Context flow remains outside the supported model", () => {
+  const findings = analyze(`
+    import { createContext, useContext } from "react";
+    import vulnerable from "vulnerable-package";
+    const Content = createContext("");
+    function Child() {
+      const html = useContext(Content);
+      return <div dangerouslySetInnerHTML={{__html: html}} />;
+    }
+    function App({ input }) {
+      const html = vulnerable(input);
+      return <Content.Provider value={html}><Child /></Content.Provider>;
+    }
+  `);
+
+  assert.equal(findings[0].reachability, "MEDIUM");
+  assert.equal(findings[0].reasonCode, "COMPONENT_WITHOUT_SINK");
+});
+
+test("object-member mutation remains outside the supported model", () => {
+  const findings = analyze(`
+    import vulnerable from "vulnerable-package";
+    function App({ input }) {
+      const payload = {};
+      payload.html = vulnerable(input);
+      return <div dangerouslySetInnerHTML={{__html: payload.html}} />;
+    }
+  `);
+
+  assert.equal(findings[0].reachability, "MEDIUM");
+  assert.equal(findings[0].reasonCode, "NO_PROVEN_SINK_PATH");
+});
+
+test("array mutation and indexed retrieval remain outside the supported model", () => {
+  const findings = analyze(`
+    import vulnerable from "vulnerable-package";
+    function App({ input }) {
+      const values = [];
+      values.push(vulnerable(input));
+      const html = values[0];
+      return <div dangerouslySetInnerHTML={{__html: html}} />;
+    }
+  `);
+
+  assert.equal(findings[0].reachability, "MEDIUM");
+  assert.equal(findings[0].reasonCode, "NO_PROVEN_SINK_PATH");
+});
