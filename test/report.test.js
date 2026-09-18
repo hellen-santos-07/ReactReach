@@ -1,7 +1,18 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const { version: packageVersion } = require("../package.json");
-const { buildReport, formatSarifReport, printSummaryTable } = require("../src/report/generateReport");
+const reportFacade = require("../src/report/generateReport");
+const { buildReport } = require("../src/report/buildReport");
+const { printSummaryTable } = require("../src/report/formatConsole");
+const { formatSarifReport } = require("../src/report/formatSarif");
+
+test("report facade preserves the existing module API", () => {
+  assert.equal(reportFacade.buildReport, buildReport);
+  assert.equal(reportFacade.printSummaryTable, printSummaryTable);
+  assert.equal(reportFacade.formatSarifReport, formatSarifReport);
+  assert.equal(typeof reportFacade.saveReport, "function");
+  assert.equal(typeof reportFacade.saveSarifReport, "function");
+});
 
 test("buildReport accepts an injected scan timestamp and preserves its schema", () => {
   const graph = { size: 1, edgeCount: 0 };

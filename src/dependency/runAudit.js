@@ -1,5 +1,17 @@
 const { execFileSync } = require("node:child_process");
 
+/**
+ * @typedef {object} VulnerablePackage
+ * @property {string} name - Package name reported by npm audit.
+ * @property {string} severity - Normalized npm severity.
+ * @property {boolean} isDirect - Whether the package is a direct dependency.
+ * @property {Array<unknown>} via - Advisory or dependency-chain entries.
+ * @property {string[]} effects - Packages affected through this dependency.
+ * @property {string|null} range - Vulnerable version range.
+ * @property {string[]} nodes - Installed dependency paths affected.
+ * @property {boolean|object} fixAvailable - npm's available-fix description.
+ */
+
 function auditError(message, cause) {
   const error = new Error(message);
   error.code = "AUDIT_FAILED";
@@ -35,27 +47,15 @@ function parseAuditOutput(output) {
 }
 
 /**
+ * Run `npm audit` for a project and normalize its vulnerable packages.
  *
- * @param {*} projectPath
- * @returns { Map<string, {
- * name: string,
- * severity: string,
- * isDirect: boolean,  
- * via: Array<string>,
- * effects: Array<string>,
- * range: string | null,
- * nodes: Array<string>,
- * fixAvailable: boolean
- *  }>}
- * 
- * name: string (the name of the vulnerable package)
- * severity: string (the severity level of the vulnerability, e.g., "low", "moderate", "high", "critical")
- * isDirect: boolean (whether the vulnerable package is a direct dependency)
- * via: Array<string> (the dependency chain leading to the vulnerable package)
- * effects: Array<string> (the paths in the dependency tree that are affected by this vulnerability)
- * range: string | null (the version range of the vulnerable package)
- * nodes: Array<string> (the specific dependency paths that lead to the vulnerable package)
- * fixAvailable: boolean (whether a fix is available for this vulnerability)
+ * @param {string} projectPath - Project directory in which npm audit is run.
+ * @param {object} [_config={}] - Reserved configuration argument.
+ * @param {object} [dependencies={}] - Optional process dependencies for testing.
+ * @param {Function} [dependencies.auditExecutor] - Replacement for `execFileSync`.
+ * @param {string} [dependencies.npmCommand] - npm executable name or path.
+ * @returns {Map<string, VulnerablePackage>} Vulnerabilities keyed by package name.
+ * @throws {Error} An error with code `AUDIT_FAILED` when audit execution or parsing fails.
  */
 function runAudit(projectPath, _config = {}, dependencies = {}) {
   const executor = dependencies.auditExecutor || execFileSync;
@@ -79,6 +79,12 @@ function runAudit(projectPath, _config = {}, dependencies = {}) {
   return extractVulnerablePackages(auditData);
 }
 
+/**
+ * Normalize the vulnerability entries in an npm audit document.
+ *
+ * @param {object} auditData - Parsed npm audit JSON document.
+ * @returns {Map<string, VulnerablePackage>} Vulnerabilities keyed by package name.
+ */
 function extractVulnerablePackages(auditData) {
   const vulnerable = new Map();
 
